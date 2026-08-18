@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cgshop2027-pyutils"
+version = "0.1.0"
+description = "Utilities for verifying solutions of the CG:SHOP 2027 Competition."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Phillip Keldenich" }]
+keywords = ["cgshop", "computational geometry", "optimization challenge"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+dependencies = [
+    "matplotlib>=3.6",  # `width_ratios` on `plt.subplots`
+    "numpy>=1.24",
+    "pydantic>=2.0.0",
+    "shapely>=2.1.2",
+    # For `override` (3.12+) and `Self` (3.11+).
+    "typing_extensions>=4.0.0; python_version<'3.12'",
+]
+
+[project.optional-dependencies]
+dev = ["pre-commit", "pytest", "ruff"]
+
+[project.urls]
+Homepage = "https://github.com/CG-SHOP/pyutils27"
+Issues = "https://github.com/CG-SHOP/pyutils27/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # The animation tests inspect frames without ever rendering the animation.
+    "ignore:Animation was deleted without rendering anything:UserWarning",
+]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "A",    # builtin shadowing
+    "ARG",  # unused arguments
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "E",    # pycodestyle
+    "EM",   # error messages (no string literals in raise)
+    "F",    # pyflakes
+    "FA",   # future annotations
+    "I",    # import sorting
+    "N",    # naming
+    "PERF", # performance
+    "PIE",
+    "PL",   # pylint
+    "PT",   # pytest style
+    "PTH",  # use pathlib
+    "RET",
+    "RSE",
+    "RUF",
+    "SIM",
+    "UP",   # pyupgrade
+    "W",
+]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "PLR0913", # too many arguments
+    "PLR2004", # magic value comparison
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The import tests import inside the test functions on purpose.
+"tests/*" = ["ARG", "PLC0415", "PLR2004"]
+# These exception names are part of the public API carried over from previous
+# years; renaming them to an `Error` suffix would break existing consumers.
+"src/cgshop2027_pyutils/zip/*" = ["N818"]
+
+[tool.pyright]
+reportUnusedCallResult = false
+reportPrivateUsage = false
+reportImplicitStringConcatenation = false
