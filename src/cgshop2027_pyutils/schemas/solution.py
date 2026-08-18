@@ -59,6 +59,13 @@ class CutterPath(BaseModel):
         return sum(units for _, units in self.steps)
 
     @property
+    def travel_distance(self) -> int:
+        """
+        The total distance traveled by the center, idling not included.
+        """
+        return sum(units for t, units in self.steps if t != "I")
+
+    @property
     def end(self) -> tuple[Coordinate, Coordinate]:
         """
         The position of the cutter's center after the last step.
@@ -136,3 +143,15 @@ class CGSHOP2027Solution(BaseModel):
                     + f"but ends up at ({e[0]}, {e[1]})"
                 )
         return self
+
+    @property
+    def makespan(self):
+        return max(c.duration for c in self.cutters)
+
+    @property
+    def max_travel_distance(self):
+        return max(c.travel_distance for c in self.cutters)
+
+    @property
+    def total_travel_distance(self):
+        return sum(c.travel_distance for c in self.cutters)

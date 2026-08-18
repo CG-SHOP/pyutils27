@@ -1,9 +1,13 @@
 import numpy as np
 import pytest
-from reference import footprint, footprint_polygon
+from conftest import footprint, footprint_polygon
 from shapely.affinity import translate
 
-from cgshop2027_pyutils.schemas import CGSHOP2027Instance, CGSHOP2027Solution
+from cgshop2027_pyutils.schemas import (
+    CGSHOP2027Instance,
+    CGSHOP2027Solution,
+    CutterPath,
+)
 from cgshop2027_pyutils.schemas.solution import _DIRECTION_DELTAS
 from cgshop2027_pyutils.verify import SolutionValidator, check_for_errors
 
@@ -415,6 +419,60 @@ def test_matches_a_naive_reference_implementation(seed: int):
     assert bool(overlaps(validator.check_for_errors(solution))) == naive_collides(
         validator, solution
     )
+
+
+def test_larger_simple_instance_with_hole():
+    instance = CGSHOP2027Instance(
+        instance_uid="large_single_hole",
+        region_to_cover={
+            "outer_boundary": {"x": [128, 384, 384, 128], "y": [512, 512, 768, 768]},
+            "inner_boundaries": [
+                {"x": [160, 160, 352, 352], "y": [544, 736, 736, 544]}
+            ],
+        },
+        cutter={"x": [0, 32, 32, 16, 16, 0], "y": [0, 0, 16, 16, 32, 32]},
+        cutter_center=[16, 16],
+        number_of_cutters=1,
+    )
+
+    solution = CGSHOP2027Solution(
+        instance_uid="large_single_hole",
+        meta={},
+        cutters=[
+            CutterPath(
+                start=[144, 528],
+                steps=[
+                    ["N", 752 - 528],
+                    ["E", 368 - 144],
+                    ["S", 752 - 528],
+                    ["W", 368 - 144],
+                ],
+            )
+        ],
+    )
+
+    validator = SolutionValidator(instance)
+    errors = validator.check_for_errors(solution)
+    assert len(errors) == 1
+    assert "region is not covered" in errors[0]
+
+    solution2 = CGSHOP2027Solution(
+        instance_uid="large_single_hole",
+        meta={},
+        cutters=[
+            CutterPath(
+                start=[144, 528],
+                steps=[
+                    ["N", 752 - 528],
+                    ["E", 368 + 16 - 144],
+                    ["W", 16],
+                    ["S", 752 - 528],
+                    ["W", 368 - 144],
+                ],
+            )
+        ],
+    )
+    assert validator.check_for_errors(solution2) == []
 
 
 # --------------------------------------------------------------------------

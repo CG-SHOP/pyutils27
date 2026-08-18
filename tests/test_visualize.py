@@ -3,10 +3,10 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import footprint_polygon
 from matplotlib.animation import FuncAnimation
 from matplotlib.figure import Figure
 from matplotlib.patches import Polygon as PolygonPatch
-from reference import footprint_polygon
 from shapely.geometry import Point
 from shapely.geometry import Polygon as ShapelyPolygon
 
