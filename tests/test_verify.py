@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from reference import footprint, footprint_polygon
 from shapely.affinity import translate
 
 from cgshop2027_pyutils.schemas import CGSHOP2027Instance, CGSHOP2027Solution
@@ -8,6 +9,11 @@ from cgshop2027_pyutils.verify import SolutionValidator, check_for_errors
 
 UNIT_CUTTER = {"x": [0, 1, 1, 0], "y": [0, 0, 1, 1]}
 BIG_CUTTER = {"x": [0, 2, 2, 0], "y": [0, 0, 2, 2]}
+# An L, so that no symmetry can hide a misplaced anchor; every center below is
+# a vertex of it, which the schema accepts because the cutter is closed.
+L_CUTTER = {"x": [0, 2, 2, 1, 1, 0], "y": [0, 0, 1, 1, 2, 2]}
+L_CUTTER_CELLS = [(0, 0), (0, 1), (1, 0)]
+L_CENTERS = [(0, 0), (1, 1), (2, 0), (0, 2), (1, 2)]
 
 
 def make_instance(size: int = 3, cutter=UNIT_CUTTER, center=(0, 0), cutters: int = 4):
@@ -121,6 +127,65 @@ def test_a_larger_cutter_covers_more_per_step():
 def test_a_stationary_cutter_covers_only_its_own_footprint():
     instance = make_instance(size=2, cutter=BIG_CUTTER)
     assert check_for_errors(instance, make_solution(path((0, 0)))) == []
+
+
+# --------------------------------------------------------------------------
+# the anchor is the cutter's center
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_a_cutter_anchored_at_its_center_sits_where_the_instance_draws_it(center):
+    """
+    A trajectory's positions are where the cutter's *center* goes, so parking
+    the anchor on `cutter_center` has to reproduce the cutter in exactly the
+    coordinates the instance spells out, whatever the center happens to be.
+    """
+    instance = make_instance(size=3, cutter=L_CUTTER, center=center, cutters=1)
+    swept = SolutionValidator(instance).swept_cells(make_solution(path(center)))
+    assert sorted(swept.cells()) == L_CUTTER_CELLS
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_moving_the_anchor_translates_the_footprint(center):
+    """The center is an offset, not a second degree of freedom."""
+    instance = make_instance(size=3, cutter=L_CUTTER, center=center, cutters=1)
+    validator = SolutionValidator(instance)
+    anchor = (center[0] + 1, center[1] + 1)
+    swept = validator.swept_cells(make_solution(path(anchor)))
+    assert sorted(swept.cells()) == [(x + 1, y + 1) for x, y in L_CUTTER_CELLS]
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_the_center_does_not_change_what_a_cutter_covers_relative_to_itself(center):
+    """
+    Two instances that differ only in `cutter_center` describe the same cutter,
+    so the same tour shifted by the difference of the centers must sweep the
+    same cells. This fails for any offset applied with the wrong sign.
+    """
+    tour = (("E", 2), ("N", 2), ("W", 2), ("S", 2))
+    baseline = SolutionValidator(make_instance(size=5, cutter=L_CUTTER, center=(0, 0)))
+    shifted = SolutionValidator(make_instance(size=5, cutter=L_CUTTER, center=center))
+    assert sorted(
+        baseline.swept_cells(make_solution(path((1, 1), *tour))).cells()
+    ) == sorted(
+        shifted.swept_cells(
+            make_solution(path((1 + center[0], 1 + center[1]), *tour))
+        ).cells()
+    )
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_collisions_do_not_depend_on_where_the_center_sits(center):
+    """
+    Overlap is decided by the offset between two anchors, and the center
+    cancels in that difference -- provided both cutters use the same one.
+    """
+    instance = make_instance(size=4, cutter=L_CUTTER, center=center)
+    pair = make_solution(path(center, ("I", 1)), path((center[0] + 1, center[1])))
+    assert overlaps(check_for_errors(instance, pair)) == [
+        "Cutters #0 and #1 overlap at time 0."
+    ]
 
 
 def test_holes_do_not_have_to_be_covered():
@@ -257,11 +322,11 @@ def test_every_colliding_pair_is_reported():
 
 def naive_uncovered(validator, solution) -> set[tuple[int, int]]:
     """Marks every cutter cell at every integer time."""
-    footprint = list(validator.cutter.cells())
+    cells = footprint(validator.instance)
     swept = set()
     for cutter in solution.cutters:
         for x, y in cutter.positions():
-            swept.update((x + dx, y + dy) for dx, dy in footprint)
+            swept.update((x + dx, y + dy) for dx, dy in cells)
     return set(validator.region.cells()) - swept
 
 
@@ -271,7 +336,7 @@ def naive_collides(validator, solution) -> bool:
     cell boundary only at multiples of 1/2, so testing quarter steps decides
     the question exactly.
     """
-    shape = validator.cutter.to_polygons()
+    shape = footprint_polygon(validator.instance)
     tracks = [list(cutter.positions()) for cutter in solution.cutters]
     span = max((len(track) for track in tracks), default=0)
     tracks = [track + [track[-1]] * (span - len(track)) for track in tracks]

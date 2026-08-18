@@ -5,6 +5,10 @@ import numpy as np
 import pytest
 from matplotlib.animation import FuncAnimation
 from matplotlib.figure import Figure
+from matplotlib.patches import Polygon as PolygonPatch
+from reference import footprint_polygon
+from shapely.geometry import Point
+from shapely.geometry import Polygon as ShapelyPolygon
 
 from cgshop2027_pyutils.schemas import CGSHOP2027Instance, CGSHOP2027Solution
 from cgshop2027_pyutils.verify import SolutionValidator
@@ -15,6 +19,28 @@ from cgshop2027_pyutils.visualize import (
 )
 
 UNIT_CUTTER = {"x": [0, 1, 1, 0], "y": [0, 0, 1, 1]}
+# An L, so that no symmetry can hide a misplaced anchor; every center below is
+# a vertex of it, which the schema accepts because the cutter is closed.
+L_CUTTER = {"x": [0, 2, 2, 1, 1, 0], "y": [0, 0, 1, 1, 2, 2]}
+L_CENTERS = [(0, 0), (1, 1), (2, 0), (0, 2), (1, 2)]
+
+
+def cutter_patches(axes) -> list[PolygonPatch]:
+    """The cutter outlines of a plot; the region is drawn as a `PathPatch`."""
+    return [patch for patch in axes.patches if isinstance(patch, PolygonPatch)]
+
+
+def drawn_area(patch: PolygonPatch) -> ShapelyPolygon:
+    return ShapelyPolygon(patch.get_xy())
+
+
+def misplaced(patch: PolygonPatch, instance, position) -> float:
+    """
+    How much of the drawn outline does not coincide with the cutter placed at
+    `position`. Zero iff the plot anchors the cutter at its center.
+    """
+    expected = footprint_polygon(instance, position)
+    return drawn_area(patch).symmetric_difference(expected).area
 
 
 def make_instance(size: int = 4, holes=(), cutter=UNIT_CUTTER, center=(0, 0)):
@@ -127,6 +153,40 @@ def test_solution_plot_includes_area_swept_outside_the_region():
 
 
 # --------------------------------------------------------------------------
+# the anchor is the cutter's center
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_the_plotted_cutter_is_placed_by_its_center(center):
+    """
+    The outline drawn at a cutter's start has to cover exactly the area the
+    cutter occupies there. The plot shifts the cutter by its center just as the
+    verifier does, and if the two ever disagreed on the sign the picture would
+    contradict the verdict printed above it.
+    """
+    instance = make_instance(size=4, cutter=L_CUTTER, center=center)
+    solution = make_solution({"start": (2, 2), "steps": []})
+    figure = create_solution_plot(instance, solution)
+    (patch,) = cutter_patches(figure.axes[0])
+    assert misplaced(patch, instance, (2, 2)) == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_the_instance_plot_draws_the_cutter_around_its_anchor(center):
+    """
+    The cutter panel is drawn relative to the center and marks it at the
+    origin, so the marker must lie on the outline rather than off to one side.
+    """
+    instance = make_instance(cutter=L_CUTTER, center=center)
+    figure = create_instance_plot(instance)
+    (patch,) = cutter_patches(figure.axes[1])
+    outline = drawn_area(patch)
+    assert outline.covers(Point(0, 0))
+    assert outline.area == pytest.approx(len(SolutionValidator(instance).cutter))
+
+
+# --------------------------------------------------------------------------
 # animation
 # --------------------------------------------------------------------------
 
@@ -201,6 +261,27 @@ def test_coverage_grows_monotonically_to_the_full_swept_area(max_frames: int):
     assert covered == sorted(covered)
     assert covered[-1] == expected
     assert covered[0] < covered[-1]
+
+
+@pytest.mark.parametrize("center", L_CENTERS)
+def test_the_animated_cutter_and_its_trail_are_anchored_at_the_center(center):
+    """
+    Both halves of a frame are placed by the center -- the moving outline and
+    the coverage stamped behind it -- so both are checked against the verifier
+    for a cutter whose center is not its corner.
+    """
+    instance = make_instance(size=4, cutter=L_CUTTER, center=center)
+    solution = make_solution()
+    animation = create_solution_animation(instance, solution)
+
+    (_, patch) = animation._func(0)
+    assert misplaced(patch, instance, solution.cutters[0].start) == pytest.approx(0.0)
+
+    for frame in frames_of(animation):
+        (image, *_) = animation._func(frame)
+    assert covered_cells(image) == len(
+        SolutionValidator(instance).swept_cells(solution)
+    )
 
 
 def test_animation_restarts_cleanly_when_it_loops():

@@ -189,7 +189,10 @@ class CGSHOP2027Instance(BaseModel):
     @model_validator(mode="after")
     def _check_cutter_center_within_cutter(self) -> Self:
         """
-        Validates that the cutter center is within the cutter shape.
+        Validates that the cutter center lies on or inside the cutter shape.
+
+        The cutter is treated as closed, so a center on an edge or a corner is
+        legal -- a 1x1 cutter has no interior lattice point at all.
         """
         cutter_polygon = Polygon(zip(self.cutter.x, self.cutter.y, strict=True))
         if not cutter_polygon.covers(_ShapelyPoint(self.cutter_center)):

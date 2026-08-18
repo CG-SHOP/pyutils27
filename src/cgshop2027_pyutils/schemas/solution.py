@@ -33,6 +33,11 @@ class CutterPath(BaseModel):
 
     Each step is a `[direction, units]` pair; one unit of travel and one unit
     of idling each take one unit of time.
+
+    Every position along the trajectory is the position of the cutter's
+    *center*: the footprint at a position `p` is the instance's cutter shape
+    translated so that its `cutter_center` lands on `p`. Since the steps are
+    relative, the center only ever enters through `start`.
     """
 
     start: tuple[Coordinate, Coordinate] = Field(
@@ -103,8 +108,9 @@ class CGSHOP2027Solution(BaseModel):
 
     A solution consists of one trajectory per available cutter. Whether these
     trajectories actually match the instance -- the right number of cutters,
-    staying within the region, and covering it -- cannot be decided from the
-    solution alone and is checked against the instance separately.
+    keeping out of each other's way, and covering the region -- cannot be
+    decided from the solution alone and is checked against the instance
+    separately. There is no containment rule: a cutter may leave the region.
     """
 
     content_type: Literal["CGSHOP2027_Solution"] = "CGSHOP2027_Solution"
