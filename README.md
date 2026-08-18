@@ -1,8 +1,8 @@
 # pyutils27 (cgshop2027-pyutils)
 
-Utilities for working with CG:SHOP 2027 instances & solutions.
-This is a pure Python package containing a parser/verifier for
-our instance format, solution format and a verifier for solutions.
+Utilities for working with CG:SHOP 2027 instances & solutions. This is a pure
+Python package containing a parser/verifier for our instance format, solution
+format and a verifier for solutions.
 
 ---
 
