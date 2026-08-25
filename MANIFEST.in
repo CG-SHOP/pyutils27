@@ -1,0 +1,4 @@
+# The test suite is shipped in the sdist; setuptools' defaults pick up the
+# test modules but not conftest.py, which two of them import from.
+graft tests
+global-exclude __pycache__ *.py[cod]

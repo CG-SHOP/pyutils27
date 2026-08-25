@@ -17,6 +17,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12" # tomllib, for the version check below
+      # PyPI never lets a version be re-uploaded, so a tag that disagrees with
+      # pyproject.toml would burn the version it names by mistake.
+      - name: Check that the tag matches the packaged version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != tag ]; then
+            echo "::error::releases must be built from a tag, got $REF_TYPE '$GITHUB_REF_NAME'"
+            exit 1
+          fi
+          version="$(python -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag '$GITHUB_REF_NAME' does not match project version '$version'"
+            exit 1
+          fi
+          echo "tag '$GITHUB_REF_NAME' matches project version '$version'"
       - name: Build SDist and wheel
         run: pipx run build
       - name: Publish package distributions to PyPI

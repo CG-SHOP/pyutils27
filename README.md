@@ -8,24 +8,22 @@ format and a verifier for solutions.
 
 ## Installation
 
+```bash
+pip install cgshop2027-pyutils
+```
+
+The current state of `main`, ahead of the latest release:
+
+```bash
+pip install git+https://github.com/CG-SHOP/pyutils27
+```
+
 From a local clone (editable, for development):
 
 ```bash
 git clone https://github.com/CG-SHOP/pyutils27
 cd pyutils27
 pip install -e ".[dev]"
-```
-
-Direct from GitHub without cloning:
-
-```bash
-pip install git+https://github.com/CG-SHOP/pyutils27
-```
-
-Once released on PyPI:
-
-```bash
-pip install cgshop2027-pyutils
 ```
 
 ---
@@ -196,7 +194,9 @@ Issues & PRs welcome. Please:
 
 ## Changelog
 
-- **0.1.0** (unreleased): Project setup.
+- **0.1.0** (2026-08-25): First release. Instance and solution schemas, the
+  solution verifier, archive reading and writing, the instance database, and
+  plotting and animation.
 
 ---
 
