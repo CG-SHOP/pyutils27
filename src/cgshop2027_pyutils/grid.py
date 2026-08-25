@@ -18,7 +18,7 @@ from shapely.ops import unary_union
 
 from .schemas.instance import PointSequence, PolyominoWithHoles
 
-__all__ = ["CellSet", "dilate", "rasterize", "rasterize_ring", "self_offsets"]
+__all__ = ["CellSet", "dilate", "rasterize", "rasterize_ring"]
 
 
 @dataclass(frozen=True)
@@ -250,15 +250,3 @@ def dilate(cells: CellSet, structuring: CellSet) -> CellSet:
         col = x - structuring.origin[0]
         result[row : row + cells.height, col : col + swept.shape[1]] |= swept
     return CellSet(result, (x_min, y_min))
-
-
-def self_offsets(cells: CellSet) -> CellSet:
-    """
-    The set of translations under which `cells` overlaps itself in area, i.e.
-    `{a - b for a in cells for b in cells}`.
-
-    Two placements of a shape overlap with positive area exactly when the
-    offset between them lies in this set, which turns an overlap test into a
-    single lookup.
-    """
-    return dilate(cells, cells.reflected())

@@ -145,10 +145,8 @@ class PolyominoWithHoles(BaseModel):
 class CGSHOP2027Instance(BaseModel):
     """
     This schema represents an instance for the CG:SHOP 2027 challenge.
-
-    Only `content_type` and `instance_uid` are fixed at this point; the fields
-    describing the actual problem still have to be added once the challenge is
-    decided.
+    It contains a region to cover, a cutter shape, the center of the cutter,
+    and the number of cutters.
     """
 
     content_type: Literal["CGSHOP2027_Instance"] = "CGSHOP2027_Instance"
@@ -173,7 +171,7 @@ class CGSHOP2027Instance(BaseModel):
 
     number_of_cutters: PositiveInt = Field(
         ...,
-        description="The number of cutter shapes available for covering the region.",
+        description="The number of cutter shapes for covering the region.",
     )
 
     @model_validator(mode="after")

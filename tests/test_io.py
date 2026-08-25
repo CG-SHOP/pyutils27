@@ -9,10 +9,7 @@ SQUARE_REGION = {
     "inner_boundaries": [],
 }
 SQUARE_CUTTER = {"x": [0, 2, 2, 0], "y": [0, 0, 2, 2]}
-CUTTER_PATH = {
-    "start": (1, 1),
-    "steps": [("E", 2), ("I", 1), ("N", 2), ("W", 2), ("S", 2)],
-}
+CUTTER_TOUR = {"x": [1, 3, 3, 1], "y": [1, 1, 3, 3]}
 
 
 def test_read_instance_from_path(tmp_path: Path):
@@ -30,6 +27,6 @@ def test_read_instance_from_path(tmp_path: Path):
 
 def test_read_solution_from_file_object():
     solution = CGSHOP2027Solution(
-        instance_uid="demo", cutters=[CUTTER_PATH], meta={"author": "you"}
+        instance_uid="demo", tours=[CUTTER_TOUR], meta={"author": "you"}
     )
     assert read_solution(io.StringIO(solution.model_dump_json())) == solution

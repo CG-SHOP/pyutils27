@@ -65,6 +65,25 @@ means the solution is feasible. When checking many solutions for the same
 instance, use `SolutionValidator(instance)` directly so that the
 instance-derived precomputation is only paid once.
 
+A solution consists of exactly `number_of_cutters` tours, one per cutter:
+
+```python
+solution = CGSHOP2027Solution(
+    instance_uid="demo",
+    tours=[{"x": [0, 3, 3, 0], "y": [0, 0, 1, 1]}, {"x": [7], "y": [7]}],
+)
+```
+
+Each tour lists the points the cutter's _center_ passes through and is closed
+implicitly, so the cutter travels from the last point back to the first one.
+Consecutive points must be axis-parallel; a point may be visited again later,
+but not immediately again. A tour of a single point is a cutter that stays where
+it is. Cutters do not interfere with each other and may leave the region; all
+that is required is that together they sweep the whole region.
+
+The objective is `solution.max_tour_length`, the length of the longest tour, and
+it is to be minimized.
+
 Bundling instances or solutions into an archive:
 
 ```python
@@ -86,6 +105,13 @@ try:
 except (ZipReaderError, BadSolutionFile) as e:
     print(f"Rejected: {e}")
 ```
+
+`example_zip.ipynb` walks the whole submission path end to end: reading the
+instances, checking solutions against them, packing an archive, and what a
+rejection looks like. It runs on the two archives next to it:
+`example_instances.zip`, a copy of the published example instances, and
+`example_solutions.zip`, one feasible solution for each of them to check against
+and to beat.
 
 Looking instances up by name, from either a folder or a zip:
 
@@ -115,12 +141,20 @@ animation.save("solution.gif", writer="pillow")
 ```
 
 The solution plot shades the swept area, marks any cells left uncovered in red
-and draws one trajectory per cutter. The animation strides through time to fit
+and draws one tour per cutter. The animation strides through the tours to fit
 `max_frames` (300 by default), filling in coverage as the cutters move; pass
 `step` to control the stride yourself.
 
+All three take `bare=True`, which drops the axes, the grid and every title and
+trims the figure to the drawing, for a picture meant for a paper or a slide
+rather than for debugging:
+
+```python
+create_solution_plot(instance, solution, bare=True).savefig("solution.pdf")
+```
+
 Instance files must be named `NAME.instance.json`. A lookup key may be the bare
-name, the file name, or a path to it — `db["demo"]`, `db["demo.instance.json"]`
+name, the file name, or a path to it: `db["demo"]`, `db["demo.instance.json"]`
 and `db["batch1/demo.instance.json"]` all resolve to the same instance. Note
 that every `.json` file in the folder or archive is treated as an instance, so
 keep solutions in a separate location.
@@ -168,4 +202,4 @@ Issues & PRs welcome. Please:
 
 ## License
 
-MIT — see `LICENSE`.
+MIT, see `LICENSE`.

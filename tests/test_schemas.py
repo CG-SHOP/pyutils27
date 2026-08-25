@@ -7,7 +7,7 @@ from cgshop2027_pyutils.schemas.instance import (
     PointSequence,
     PolyominoWithHoles,
 )
-from cgshop2027_pyutils.schemas.solution import CGSHOP2027Solution, CutterPath
+from cgshop2027_pyutils.schemas.solution import CGSHOP2027Solution, CutterTour
 
 # Rectilinear, integer-coordinate boundaries shared by the tests below.
 SQUARE_CCW = {"x": [0, 4, 4, 0], "y": [0, 0, 4, 4]}
@@ -437,21 +437,15 @@ def test_instance_reports_the_location_of_a_bad_region():
 # CGSHOP2027Solution
 # --------------------------------------------------------------------------
 
-# A closed L-shaped tour with an idle period in the middle. Cutters in a
-# solution have to return to where they started, so the paths used here are
-# loops; `OPEN_PATH` stays open to exercise `CutterPath` on its own, which
-# carries no such requirement.
-L_PATH = {
-    "start": (3, 5),
-    "steps": [("N", 3), ("I", 2), ("W", 1), ("E", 1), ("S", 3)],
-}
-STATIONARY_PATH = {"start": (0, 0), "steps": []}
-OPEN_PATH = {"start": (3, 5), "steps": [("N", 3), ("I", 2), ("W", 1)]}
+# A closed rectangular tour, and a cutter that stays where it is. Tours are
+# closed implicitly, so neither of them repeats its first point at the end.
+L_TOUR = {"x": [3, 3, 2, 2], "y": [5, 8, 8, 5]}
+STATIONARY_TOUR = {"x": [0], "y": [0]}
 
 
 def make_solution(**overrides):
     """Builds a valid solution, with individual fields replaceable per test."""
-    fields = {"instance_uid": "demo", "cutters": [L_PATH, STATIONARY_PATH]}
+    fields = {"instance_uid": "demo", "tours": [L_TOUR, STATIONARY_TOUR]}
     fields.update(overrides)
     return CGSHOP2027Solution(**fields)
 
@@ -461,60 +455,47 @@ def test_solution_accepts_a_valid_solution():
     assert solution.content_type == "CGSHOP2027_Solution"
     assert solution.instance_uid == "demo"
     assert solution.meta == {}
-    assert len(solution.cutters) == 2
-    assert solution.cutters[0].steps == [
-        ("N", 3),
-        ("I", 2),
-        ("W", 1),
-        ("E", 1),
-        ("S", 3),
-    ]
+    assert len(solution.tours) == 2
+    assert list(solution.tours[0].points()) == [(3, 5), (3, 8), (2, 8), (2, 5)]
 
 
 def test_solution_accepts_a_stationary_cutter():
-    """A cutter that never moves is expressed as an empty step list."""
-    solution = make_solution(cutters=[STATIONARY_PATH])
-    assert solution.cutters[0].steps == []
-    assert solution.cutters[0].end == (0, 0)
+    """A cutter that never moves is expressed as a tour of a single point."""
+    tour = make_solution(tours=[STATIONARY_TOUR]).tours[0]
+    assert tour.start == (0, 0)
+    assert tour.length == 0
+    assert list(tour.edges()) == []
+    assert list(tour.positions()) == [(0, 0)]
 
 
-def test_solution_accepts_no_cutters_at_all():
+def test_solution_accepts_no_tours_at_all():
     """
-    Whether the number of trajectories matches `number_of_cutters` can only be
-    decided against the instance, so the solution schema stays permissive here.
+    Whether the number of tours matches `number_of_cutters` can only be decided
+    against the instance, so the solution schema stays permissive here.
     """
-    assert make_solution(cutters=[]).cutters == []
+    assert make_solution(tours=[]).tours == []
 
 
-def test_steps_may_be_given_as_lists():
-    """JSON has no tuples, so the list form has to be accepted as well."""
-    from_lists = make_solution(
-        cutters=[{"start": [3, 5], "steps": [["N", 3], ["S", 3]]}]
-    )
-    from_tuples = make_solution(
-        cutters=[{"start": (3, 5), "steps": [("N", 3), ("S", 3)]}]
-    )
-    assert from_lists == from_tuples
+def test_solution_accepts_a_there_and_back_tour():
+    """Two points are a legal tour: the cutter runs out and comes back."""
+    tour = make_solution(tours=[{"x": [0, 3], "y": [0, 0]}]).tours[0]
+    assert list(tour.edges()) == [((0, 0), (3, 0)), ((3, 0), (0, 0))]
+    assert tour.length == 6
 
 
-def test_solution_accepts_an_immediate_reversal():
-    """Stepping back onto the previous position is a legal, if pointless, move."""
-    path = make_solution(cutters=[{"start": (0, 0), "steps": [("N", 1), ("S", 1)]}])
-    assert path.cutters[0].end == (0, 0)
-
-
-def test_solution_accepts_consecutive_steps_in_the_same_direction():
+def test_solution_accepts_a_point_visited_again_later():
     """
-    `[("N", 3), ("N", 2)]` is not normalized into `[("N", 5)]`. Rejecting the
-    unmerged form would be a purely cosmetic restriction on participants, so
-    both spellings are valid and describe the same trajectory.
+    Only *immediate* repeats are rejected. Coming back to a point after having
+    been elsewhere is how a tour retraces its own steps, which is legal.
     """
-    split = make_solution(
-        cutters=[{"start": (0, 0), "steps": [("N", 3), ("N", 2), ("S", 5)]}]
-    )
-    merged = make_solution(cutters=[{"start": (0, 0), "steps": [("N", 5), ("S", 5)]}])
-    assert split.cutters[0].steps == [("N", 3), ("N", 2), ("S", 5)]
-    assert list(split.cutters[0].positions()) == list(merged.cutters[0].positions())
+    tour = make_solution(tours=[{"x": [0, 2, 2, 0, 0, 2], "y": [0, 0, 1, 1, 0, 0]}])
+    assert list(tour.tours[0].points()).count((0, 0)) == 2
+
+
+def test_solution_accepts_a_self_crossing_tour():
+    """A tour is not a polygon; it may cross itself."""
+    tour = make_solution(tours=[{"x": [0, 4, 4, 2, 2, 0], "y": [1, 1, 2, 2, 0, 0]}])
+    assert tour.tours[0].length == 12
 
 
 def test_solution_survives_a_json_round_trip():
@@ -524,59 +505,50 @@ def test_solution_survives_a_json_round_trip():
     )
 
 
-def test_steps_are_serialized_as_pairs_not_objects():
-    """The wire format of a step is `["N", 3]`, not `{"direction": ...}`."""
-    dumped = make_solution(cutters=[L_PATH]).model_dump_json()
-    assert '"steps":[["N",3],["I",2],["W",1],["E",1],["S",3]]' in dumped
+def test_tours_are_serialized_as_coordinate_lists():
+    """The wire format of a tour is `{"x": [...], "y": [...]}`, as in the instance."""
+    dumped = make_solution(tours=[L_TOUR]).model_dump_json()
+    assert '"tours":[{"x":[3,3,2,2],"y":[5,8,8,5]}]' in dumped
 
 
 # --- rejected input ---
 
 
-@pytest.mark.parametrize("direction", ["north", "n", "U", "", "NE"])
-def test_solution_rejects_an_unknown_direction(direction: str):
-    with pytest.raises(ValidationError, match="'N', 'E', 'S', 'W' or 'I'"):
-        make_solution(cutters=[{"start": (0, 0), "steps": [(direction, 1)]}])
+def test_solution_rejects_a_diagonal_edge():
+    with pytest.raises(ValidationError, match="is not orthogonal"):
+        make_solution(tours=[{"x": [0, 2, 3], "y": [0, 0, 1]}])
 
 
-@pytest.mark.parametrize("units", [0, -1])
-def test_solution_rejects_non_positive_units(units: int):
-    with pytest.raises(ValidationError, match="greater than 0"):
-        make_solution(cutters=[{"start": (0, 0), "steps": [("N", units)]}])
+def test_solution_rejects_a_diagonal_closing_edge():
+    """The way back from the last point to the first one is an edge as well."""
+    with pytest.raises(ValidationError, match="closing edge from"):
+        make_solution(tours=[{"x": [0, 2, 2], "y": [0, 0, 1]}])
 
 
-def test_solution_rejects_fractional_units():
-    with pytest.raises(ValidationError, match="fractional part"):
-        make_solution(cutters=[{"start": (0, 0), "steps": [("N", 1.5)]}])
+def test_solution_rejects_an_immediately_repeated_point():
+    with pytest.raises(ValidationError, match="immediately repeated"):
+        make_solution(tours=[{"x": [0, 2, 2, 0], "y": [0, 0, 0, 0]}])
 
 
-def test_solution_rejects_a_step_without_a_unit_count():
-    with pytest.raises(ValidationError) as exc_info:
-        make_solution(cutters=[{"start": (0, 0), "steps": [("N",)]}])
-    error = exc_info.value.errors()[0]
-    assert error["type"] == "missing"
-    assert error["loc"] == ("cutters", 0, "steps", 0, 1)
+def test_solution_rejects_a_last_point_that_repeats_the_first():
+    """Closing the tour explicitly repeats the first point, which is implicit."""
+    with pytest.raises(ValidationError, match="immediately repeated by the first"):
+        make_solution(tours=[{"x": [0, 2, 2, 0, 0], "y": [0, 0, 1, 1, 0]}])
 
 
-def test_solution_rejects_an_overlong_step():
-    with pytest.raises(ValidationError, match="at most 2 items"):
-        make_solution(cutters=[{"start": (0, 0), "steps": [("N", 1, 1)]}])
+def test_solution_rejects_mismatched_coordinate_lists():
+    with pytest.raises(ValidationError, match="same length"):
+        make_solution(tours=[{"x": [0, 2, 2], "y": [0, 0]}])
 
 
-def test_solution_rejects_a_cutter_that_does_not_return_to_its_start():
-    with pytest.raises(ValidationError, match="does not return to its origin"):
-        make_solution(cutters=[OPEN_PATH])
+def test_solution_rejects_an_empty_tour():
+    with pytest.raises(ValidationError, match="at least one point"):
+        make_solution(tours=[{"x": [], "y": []}])
 
 
-def test_the_index_of_the_wandering_cutter_is_reported():
-    with pytest.raises(ValidationError, match=r"Cutter #1 "):
-        make_solution(cutters=[L_PATH, OPEN_PATH])
-
-
-def test_a_detour_that_comes_back_is_not_a_wandering_cutter():
-    """Returning home is about the end position, not about the route taken."""
-    detour = {"start": (0, 0), "steps": [("N", 4), ("E", 2), ("S", 4), ("W", 2)]}
-    assert make_solution(cutters=[detour]).cutters[0].end == (0, 0)
+def test_solution_rejects_fractional_coordinates():
+    with pytest.raises(ValidationError, match="valid integer"):
+        make_solution(tours=[{"x": [0, 2.5], "y": [0, 0]}])
 
 
 def test_solution_rejects_a_foreign_content_type():
@@ -584,9 +556,9 @@ def test_solution_rejects_a_foreign_content_type():
         make_solution(content_type="CGSHOP2026_Solution")
 
 
-@pytest.mark.parametrize("field", ["instance_uid", "cutters"])
+@pytest.mark.parametrize("field", ["instance_uid", "tours"])
 def test_solution_requires_every_problem_field(field: str):
-    fields = {"instance_uid": "demo", "cutters": [L_PATH]}
+    fields = {"instance_uid": "demo", "tours": [L_TOUR]}
     del fields[field]
     with pytest.raises(ValidationError) as exc_info:
         CGSHOP2027Solution(**fields)
@@ -595,16 +567,15 @@ def test_solution_requires_every_problem_field(field: str):
     assert error["loc"] == (field,)
 
 
-def test_cutter_path_requires_steps():
-    """
-    Like `PolyominoWithHoles.inner_boundaries`, `steps` is required rather than
-    defaulting to an empty list, so a stationary cutter still says so explicitly.
-    """
+@pytest.mark.parametrize("coordinate", ["x", "y"])
+def test_tour_requires_both_coordinate_lists(coordinate: str):
+    tour = dict(L_TOUR)
+    del tour[coordinate]
     with pytest.raises(ValidationError) as exc_info:
-        make_solution(cutters=[{"start": (0, 0)}])
+        make_solution(tours=[tour])
     error = exc_info.value.errors()[0]
     assert error["type"] == "missing"
-    assert error["loc"] == ("cutters", 0, "steps")
+    assert error["loc"] == ("tours", 0, coordinate)
 
 
 @pytest.mark.parametrize(
@@ -612,99 +583,73 @@ def test_cutter_path_requires_steps():
     [{}, {"exclude_defaults": True}, {"exclude_unset": True}, {"exclude_none": True}],
     ids=["plain", "exclude_defaults", "exclude_unset", "exclude_none"],
 )
-def test_empty_step_and_cutter_lists_are_always_serialized(
-    dump_options: dict[str, bool],
-):
+def test_the_empty_tour_list_is_always_serialized(dump_options: dict[str, bool]):
     """
-    Neither an idle cutter nor an empty solution may be written out with the
-    key omitted; being required fields is what guarantees this.
+    An empty solution may not be written out with the key omitted; being a
+    required field is what guarantees this.
     """
-    dumped = make_solution(cutters=[STATIONARY_PATH]).model_dump_json(**dump_options)
-    assert '"steps":[]' in dumped
-    assert '"cutters":[]' in make_solution(cutters=[]).model_dump_json(**dump_options)
+    assert '"tours":[]' in make_solution(tours=[]).model_dump_json(**dump_options)
 
 
-def test_solution_reports_the_location_of_a_bad_step():
+def test_solution_reports_the_location_of_a_bad_tour():
     with pytest.raises(ValidationError) as exc_info:
-        make_solution(
-            cutters=[
-                STATIONARY_PATH,
-                {"start": (0, 0), "steps": [("N", 1), ("E", 1), ("north", 1)]},
-            ]
-        )
-    assert exc_info.value.errors()[0]["loc"] == ("cutters", 1, "steps", 2, 0)
+        make_solution(tours=[STATIONARY_TOUR, {"x": [0, 1], "y": [0, 1]}])
+    assert exc_info.value.errors()[0]["loc"] == ("tours", 1)
 
 
-# --- trajectory helpers ---
+# --- tour helpers ---
 
 
-def test_duration_counts_idle_time():
-    assert CutterPath(**OPEN_PATH).duration == 6
-    assert CutterPath(**STATIONARY_PATH).duration == 0
+def test_length_includes_the_closing_edge():
+    """The way back from the last point to the first one is part of the tour."""
+    assert CutterTour(**L_TOUR).length == 8
+    assert CutterTour(**STATIONARY_TOUR).length == 0
 
 
-def test_end_is_the_last_position():
-    path = CutterPath(**OPEN_PATH)
-    assert path.end == (2, 8)
-    assert path.end == list(path.positions())[-1]
+def test_points_does_not_repeat_the_first_point():
+    tour = CutterTour(**L_TOUR)
+    assert list(tour.points()) == [(3, 5), (3, 8), (2, 8), (2, 5)]
+    assert tour.start == (3, 5)
 
 
-def test_positions_traces_the_trajectory_step_by_step():
-    """Idling repeats the position, so time and index stay in sync."""
-    assert list(CutterPath(**OPEN_PATH).positions()) == [
-        (3, 5),
-        (3, 6),
-        (3, 7),
-        (3, 8),  # arrived after three units north
-        (3, 8),  # idling
-        (3, 8),
-        (2, 8),  # one unit west
+def test_edges_yields_one_edge_per_point():
+    tour = CutterTour(**L_TOUR)
+    edges = list(tour.edges())
+    assert len(edges) == len(tour.x)
+    assert edges[-1] == ((2, 5), (3, 5))  # the closing edge
+    assert [start for start, _ in edges] == list(tour.points())
+
+
+def test_positions_traces_the_tour_unit_by_unit():
+    assert list(CutterTour(x=[0, 2], y=[0, 0]).positions()) == [
+        (0, 0),
+        (1, 0),
+        (2, 0),  # arrived at the far point
+        (1, 0),
+        (0, 0),  # and back home again
     ]
 
 
-def test_waypoints_yields_one_point_per_step_boundary():
-    path = CutterPath(**OPEN_PATH)
-    waypoints = list(path.waypoints())
-    assert len(waypoints) == len(path.steps) + 1
-    assert waypoints[0] == path.start
-    assert waypoints[-1] == path.end
+def test_positions_yields_one_point_per_unit_of_travel():
+    for tour in (CutterTour(**L_TOUR), CutterTour(**STATIONARY_TOUR)):
+        positions = list(tour.positions())
+        assert len(positions) == tour.length + 1
+        assert positions[0] == positions[-1] == tour.start
 
 
-def test_waypoints_repeats_the_position_while_idling():
-    """An idle step is a corner that does not turn, so the point repeats."""
-    assert list(CutterPath(**OPEN_PATH).waypoints()) == [
-        (3, 5),
-        (3, 8),  # three units north
-        (3, 8),  # idling
-        (2, 8),  # one unit west
-    ]
+def test_positions_visits_every_point_of_the_tour():
+    tour = CutterTour(**L_TOUR)
+    assert set(tour.points()) <= set(tour.positions())
 
 
-def test_waypoints_agree_with_positions_at_the_step_boundaries():
-    """
-    The two views of a trajectory must not drift: sampling `positions()` at the
-    cumulative step durations has to reproduce `waypoints()` exactly.
-    """
-    path = CutterPath(**OPEN_PATH)
-    positions = list(path.positions())
-    boundaries, elapsed = [0], 0
-    for _, units in path.steps:
-        elapsed += units
-        boundaries.append(elapsed)
-    assert [positions[t] for t in boundaries] == list(path.waypoints())
+def test_the_objective_is_the_length_of_the_longest_tour():
+    solution = make_solution(tours=[L_TOUR, {"x": [0, 7], "y": [0, 0]}])
+    assert [tour.length for tour in solution.tours] == [8, 14]
+    assert solution.max_tour_length == 14
+    assert solution.objective == solution.max_tour_length
+    assert solution.total_tour_length == 22
 
 
-def test_positions_yields_one_point_per_time_step():
-    for path in (CutterPath(**OPEN_PATH), CutterPath(**STATIONARY_PATH)):
-        assert len(list(path.positions())) == path.duration + 1
-
-
-@pytest.mark.parametrize(
-    ("direction", "expected"),
-    [("N", (0, 1)), ("E", (1, 0)), ("S", (0, -1)), ("W", (-1, 0)), ("I", (0, 0))],
-)
-def test_each_direction_moves_the_expected_way(
-    direction: str, expected: tuple[int, int]
-):
-    """North is +y, matching the orientation convention of `PointSequence.is_ccw`."""
-    assert CutterPath(start=(0, 0), steps=[(direction, 1)]).end == expected
+def test_the_objective_of_a_solution_without_tours_is_zero():
+    assert make_solution(tours=[]).max_tour_length == 0
+    assert make_solution(tours=[]).total_tour_length == 0

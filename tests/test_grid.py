@@ -2,13 +2,7 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon
 
-from cgshop2027_pyutils.grid import (
-    CellSet,
-    dilate,
-    rasterize,
-    rasterize_ring,
-    self_offsets,
-)
+from cgshop2027_pyutils.grid import CellSet, dilate, rasterize, rasterize_ring
 from cgshop2027_pyutils.schemas.instance import PointSequence, PolyominoWithHoles
 
 SQUARE = {"x": [0, 5, 5, 0], "y": [0, 0, 5, 5]}
@@ -154,22 +148,3 @@ def test_dilate_matches_the_naive_sum():
         assert set(dilate(cells, structuring).cells()) == naive_dilate(
             cells, structuring
         )
-
-
-def test_self_offsets_matches_the_naive_difference_set():
-    rng = np.random.default_rng(1)
-    for _ in range(100):
-        cells = random_cell_set(rng, (4, 5))
-        expected = {
-            (ax - bx, ay - by) for ax, ay in cells.cells() for bx, by in cells.cells()
-        }
-        assert set(self_offsets(cells).cells()) == expected
-
-
-def test_self_offsets_of_a_single_cell_is_the_zero_offset():
-    assert sorted(self_offsets(CellSet(np.array([[True]]), (5, 5))).cells()) == [(0, 0)]
-
-
-def test_self_offsets_is_symmetric():
-    offsets = self_offsets(rasterize_ring(ring(L_SHAPE)))
-    assert sorted(offsets.cells()) == sorted((-x, -y) for x, y in offsets.cells())

@@ -2,108 +2,128 @@ import sys
 from collections.abc import Iterator
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, PositiveInt, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 if sys.version_info >= (3, 11):
     from typing import Self
 else:
     from typing_extensions import Self
 
-from .instance import Coordinate
+from .instance import Coordinate, CoordinateList
 
-Direction = Literal["N", "E", "S", "W", "I"]
-Step = tuple[Direction, PositiveInt]
-
-# `y` grows northwards, matching the orientation convention of
-# `PointSequence.is_ccw`. "I" is idling, which costs time but no movement.
-_DIRECTION_DELTAS: dict[Direction, tuple[Coordinate, Coordinate]] = {
-    "N": (0, 1),
-    "E": (1, 0),
-    "S": (0, -1),
-    "W": (-1, 0),
-    "I": (0, 0),
-}
+Point = tuple[Coordinate, Coordinate]
 
 
-class CutterPath(BaseModel):
+class CutterTour(BaseModel):
     """
-    This schema represents the trajectory of a single cutter, given as a
-    start position followed by a sequence of axis-parallel moves and idle
-    periods.
+    This schema represents the closed tour of a single cutter, given as the
+    sequence of corner points its center passes through.
 
-    Each step is a `[direction, units]` pair; one unit of travel and one unit
-    of idling each take one unit of time.
+    The tour is *implicitly* closed: the cutter travels from the last point
+    back to the first one. Consecutive points -- the closing pair included --
+    must be axis-parallel, i.e., differ in exactly one coordinate; a point may
+    well be visited again later, but not immediately again.
 
-    Every position along the trajectory is the position of the cutter's
-    *center*: the footprint at a position `p` is the instance's cutter shape
-    translated so that its `cutter_center` lands on `p`. Since the steps are
-    relative, the center only ever enters through `start`.
+    Every point is a position of the cutter's *center*: the footprint at a
+    position `p` is the instance's cutter shape translated so that its
+    `cutter_center` lands on `p`. A tour of a single point is a cutter that
+    stays where it is.
     """
 
-    start: tuple[Coordinate, Coordinate] = Field(
-        ...,
-        description="Position at which the cutter's center is placed at time 0.",
-    )
+    x: CoordinateList = Field(..., description="X coordinates of the tour's points.")
+    y: CoordinateList = Field(..., description="Y coordinates of the tour's points.")
 
-    steps: list[Step] = Field(
-        ...,
-        description="Steps of the trajectory, each a pair of a direction "
-        "('N', 'E', 'S', 'W', or 'I' for idling) and a positive number of units.",
-    )
+    @model_validator(mode="after")
+    def _check_matching_lengths(self) -> Self:
+        if len(self.x) != len(self.y):
+            msg = (
+                f"The coordinate lists must have the same length, but got "
+                f"{len(self.x)} x-coordinates and {len(self.y)} y-coordinates."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _check_for_minimum_points(self) -> Self:
+        if not self.x:
+            msg = "A tour must consist of at least one point."
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _check_edges(self) -> Self:
+        """
+        Rejects edges that are not axis-parallel, and points that repeat the
+        point right before them -- which the closing edge extends to a last
+        point that repeats the first one.
+        """
+        last = len(self.x) - 1
+        for index, (start, end) in enumerate(self.edges()):
+            closing = " closing" if index == last else ""
+            if start == end:
+                successor = (
+                    "first point" if index == last else f"point at index {index + 1}"
+                )
+                msg = (
+                    f"The point {start} at index {index} is immediately repeated "
+                    f"by the {successor}; the tour is closed implicitly, "
+                    f"and a point may only be revisited later on."
+                )
+                raise ValueError(msg)
+            if start[0] != end[0] and start[1] != end[1]:
+                msg = (
+                    f"The{closing} edge from {start} to {end} is not orthogonal. "
+                    f"All edges must be either horizontal or vertical."
+                )
+                raise ValueError(msg)
+        return self
 
     @property
-    def duration(self) -> int:
+    def start(self) -> Point:
         """
-        The number of time units the trajectory takes, idling included.
+        The first point of the tour.
         """
-        return sum(units for _, units in self.steps)
+        return (self.x[0], self.y[0])
 
     @property
-    def travel_distance(self) -> int:
+    def length(self) -> int:
         """
-        The total distance traveled by the center, idling not included.
+        The distance the center travels once around the tour, the way back from
+        the last point to the first one included.
         """
-        return sum(units for t, units in self.steps if t != "I")
+        return sum(
+            abs(end[0] - start[0]) + abs(end[1] - start[1])
+            for start, end in self.edges()
+        )
 
-    @property
-    def end(self) -> tuple[Coordinate, Coordinate]:
+    def points(self) -> Iterator[Point]:
         """
-        The position of the cutter's center after the last step.
+        Yields the corner points of the tour, each one exactly once.
         """
-        x, y = self.start
-        for direction, units in self.steps:
-            dx, dy = _DIRECTION_DELTAS[direction]
-            x += dx * units
-            y += dy * units
-        return (x, y)
+        yield from zip(self.x, self.y, strict=True)
 
-    def waypoints(self) -> Iterator[tuple[Coordinate, Coordinate]]:
+    def edges(self) -> Iterator[tuple[Point, Point]]:
         """
-        Yields the position of the cutter's center at the start and after each
-        step; hence `len(steps) + 1` positions.
+        Yields the edges of the tour as pairs of points, the closing edge from
+        the last point back to the first one included; hence one edge per
+        point, and none at all for a tour of a single point.
+        """
+        if len(self.x) < 2:
+            return
+        points = list(self.points())
+        yield from zip(points, [*points[1:], points[0]], strict=True)
 
-        This is the trajectory's corner points, which is what a drawing or a
-        segment-wise sweep needs; use `positions()` when a value per unit of
-        time is required.
+    def positions(self) -> Iterator[Point]:
+        """
+        Yields the position of the cutter's center after every unit of travel,
+        starting and ending at `start`; hence `length + 1` positions.
         """
         x, y = self.start
         yield (x, y)
-        for direction, units in self.steps:
-            dx, dy = _DIRECTION_DELTAS[direction]
-            x += dx * units
-            y += dy * units
-            yield (x, y)
-
-    def positions(self) -> Iterator[tuple[Coordinate, Coordinate]]:
-        """
-        Yields the position of the cutter's center at every time step,
-        starting with `start` at time 0; hence `duration + 1` positions.
-        """
-        x, y = self.start
-        yield (x, y)
-        for direction, units in self.steps:
-            dx, dy = _DIRECTION_DELTAS[direction]
-            for _ in range(units):
+        for start, end in self.edges():
+            dx = (end[0] > start[0]) - (end[0] < start[0])
+            dy = (end[1] > start[1]) - (end[1] < start[1])
+            for _ in range(abs(end[0] - start[0]) + abs(end[1] - start[1])):
                 x += dx
                 y += dy
                 yield (x, y)
@@ -112,20 +132,16 @@ class CutterPath(BaseModel):
 class CGSHOP2027Solution(BaseModel):
     """
     This schema represents a solution for the CG:SHOP 2027 challenge.
-
-    A solution consists of one trajectory per available cutter. Whether these
-    trajectories actually match the instance -- the right number of cutters,
-    keeping out of each other's way, and covering the region -- cannot be
-    decided from the solution alone and is checked against the instance
-    separately. There is no containment rule: a cutter may leave the region.
+    The objective is `max_tour_length`, the length of the longest tour, and is
+    to be minimized.
     """
 
     content_type: Literal["CGSHOP2027_Solution"] = "CGSHOP2027_Solution"
 
     instance_uid: str = Field(..., description="Unique identifier of the instance.")
 
-    cutters: list[CutterPath] = Field(
-        ..., description="The trajectory of each cutter used by this solution."
+    tours: list[CutterTour] = Field(
+        ..., description="The closed tour of each cutter used by this solution."
     )
 
     meta: dict[str, Any] = Field(
@@ -133,25 +149,23 @@ class CGSHOP2027Solution(BaseModel):
         description="Optional metadata about the solution, e.g., the name of the algorithm used to compute it.",
     )
 
-    @model_validator(mode="after")
-    def _check_each_cutter_returns_to_start(self) -> Self:
-        for i, cutter_path in enumerate(self.cutters):
-            s, e = cutter_path.start, cutter_path.end
-            if s != e:
-                raise ValueError(
-                    f"Cutter #{i} does not return to its origin ({s[0]},{s[1]}) "
-                    + f"but ends up at ({e[0]}, {e[1]})"
-                )
-        return self
+    @property
+    def max_tour_length(self) -> int:
+        """
+        The length of the longest tour, i.e., the objective value.
+        """
+        return max((tour.length for tour in self.tours), default=0)
 
     @property
-    def makespan(self):
-        return max(c.duration for c in self.cutters)
+    def objective(self) -> int:
+        """
+        The value to be minimized, which is `max_tour_length`.
+        """
+        return self.max_tour_length
 
     @property
-    def max_travel_distance(self):
-        return max(c.travel_distance for c in self.cutters)
-
-    @property
-    def total_travel_distance(self):
-        return sum(c.travel_distance for c in self.cutters)
+    def total_tour_length(self) -> int:
+        """
+        The distance travelled by all cutters together.
+        """
+        return sum(tour.length for tour in self.tours)

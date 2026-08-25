@@ -9,7 +9,11 @@ Usage:
 - `create_solution_plot(instance, solution)` for a solution, with the swept
   area and any gaps marked,
 - `create_solution_animation(instance, solution)` for the cutters moving along
-  their trajectories, filling in coverage as they go.
+  their tours, filling in coverage as they go.
+
+Every one of them takes `bare=True`, which strips the figure down to the
+drawing itself -- no axes, no grid, no titles -- for a picture that goes into a
+paper or a slide rather than in front of someone debugging.
 """
 
 import math
@@ -27,9 +31,9 @@ from matplotlib.patches import Polygon as PolygonPatch
 from matplotlib.path import Path as MplPath
 
 from .grid import CellSet, _blit, dilate
-from .schemas import CGSHOP2027Instance, CGSHOP2027Solution
+from .schemas import CGSHOP2027Instance, CGSHOP2027Solution, CutterTour
 from .schemas.instance import PointSequence, PolyominoWithHoles
-from .verify import SolutionValidator, _trajectory
+from .verify import SolutionValidator
 
 __all__ = [
     "create_instance_plot",
@@ -96,14 +100,45 @@ def _as_image(mask: np.ndarray) -> np.ma.MaskedArray:
     return np.ma.masked_where(~mask, np.ones_like(mask, dtype=np.uint8))
 
 
-def _style_axes(ax: Axes, title: str | None = None) -> None:
+def _style_axes(ax: Axes, title: str | None = None, *, bare: bool = False) -> None:
+    """
+    The frame around a drawing: equal aspect always, and everything that is not
+    the drawing itself unless `bare`.
+    """
     ax.set_aspect("equal", adjustable="box")
+    if bare:
+        ax.set_axis_off()
+        return
     ax.grid(True, alpha=0.3, linewidth=0.5)
     ax.tick_params(labelsize=6)
     ax.set_xlabel("x", fontsize=7)
     ax.set_ylabel("y", fontsize=7)
     if title:
         ax.set_title(title, fontsize=9, pad=4)
+
+
+def _finish(fig: Figure, title: str, *, bare: bool, ax: Axes | None = None) -> None:
+    """
+    Titles the figure and packs it, or -- when `bare` -- packs it edge to edge
+    and, given the one axes it holds, trims the figure to the drawing's own
+    aspect ratio, so that nothing is left but the picture.
+    """
+    if not bare:
+        fig.suptitle(title, fontsize=11)
+        fig.tight_layout()
+        return
+    if ax is not None:
+        _fit_to_axes(fig, ax)
+    fig.tight_layout(pad=0)
+
+
+def _fit_to_axes(fig: Figure, ax: Axes) -> None:
+    """Shrinks the figure to the shape of the axes' data, keeping its larger side."""
+    (x_min, x_max), (y_min, y_max) = ax.get_xlim(), ax.get_ylim()
+    width, height = max(x_max - x_min, 1e-9), max(y_max - y_min, 1e-9)
+    inches_x, inches_y = fig.get_size_inches()
+    scale = min(inches_x / width, inches_y / height)
+    fig.set_size_inches(width * scale, height * scale)
 
 
 def _set_limits(
@@ -126,15 +161,15 @@ def _drawn_bounds(cells: CellSet) -> tuple[int, int, int, int]:
     return (x_min, y_min, x_max + 1, y_max + 1)
 
 
-def _trajectory_bounds(solution: CGSHOP2027Solution) -> tuple[int, int, int, int]:
+def _tour_bounds(solution: CGSHOP2027Solution) -> tuple[int, int, int, int]:
     """
     The box the anchors travel through.
 
     Worth including in the view of its own accord: the verifier clips the swept
     area to the region's neighbourhood, since that is all coverage depends on,
-    so an excursion further out shows up only in the trajectory.
+    so an excursion further out shows up only in the tour.
     """
-    points = [point for path in solution.cutters for point in path.waypoints()]
+    points = [point for tour in solution.tours for point in tour.points()]
     if not points:
         return (0, 0, 0, 0)
     return (
@@ -164,9 +199,32 @@ def _placed(outline: list[tuple[int, int]], position) -> list[tuple[int, int]]:
     return [(x + position[0], y + position[1]) for x, y in outline]
 
 
-def create_instance_plot(instance: CGSHOP2027Instance) -> Figure:
+def _closed(tour: CutterTour) -> list[tuple[int, int]]:
+    """The tour's points with the first one repeated, so that it draws closed."""
+    points = list(tour.points())
+    return [*points, points[0]]
+
+
+def _walk(tour: CutterTour, total: int) -> np.ndarray:
+    """
+    The center's position after every unit of travel, padded to `total` units.
+
+    A cutter with a shorter tour is back at its start before the animation
+    ends and simply stays parked there.
+    """
+    positions = np.array(list(tour.positions()), dtype=np.int64)
+    missing = total + 1 - len(positions)
+    if missing > 0:
+        positions = np.concatenate([positions, np.repeat(positions[-1:], missing, 0)])
+    return positions
+
+
+def create_instance_plot(instance: CGSHOP2027Instance, *, bare: bool = False) -> Figure:
     """
     Plots the region to cover next to the cutter shape.
+
+    :param bare: Draw the region and the cutter alone, without axes, grid or
+                 titles.
     """
     validator = SolutionValidator(instance)
     fig, (ax_region, ax_cutter) = plt.subplots(
@@ -182,7 +240,9 @@ def create_instance_plot(instance: CGSHOP2027Instance) -> Figure:
         )
     )
     _set_limits(ax_region, _region_bounds(instance.region_to_cover))
-    _style_axes(ax_region, f"Region to cover — {len(validator.region)} cells")
+    _style_axes(
+        ax_region, f"Region to cover ({len(validator.region)} cells)", bare=bare
+    )
 
     outline = _cutter_outline(instance)
     ax_cutter.add_patch(
@@ -210,20 +270,27 @@ def create_instance_plot(instance: CGSHOP2027Instance) -> Figure:
     )
     _style_axes(
         ax_cutter,
-        f"Cutter ({len(validator.cutter)} cells) — {instance.number_of_cutters} available",
+        f"Cutter ({len(validator.cutter)} cells) ({instance.number_of_cutters} available)",
+        bare=bare,
     )
 
-    fig.suptitle(f"CG:SHOP 2027 instance: {instance.instance_uid}", fontsize=11)
-    fig.tight_layout()
+    _finish(fig, f"CG:SHOP 2027 instance: {instance.instance_uid}", bare=bare)
     return fig
 
 
 def create_solution_plot(
-    instance: CGSHOP2027Instance, solution: CGSHOP2027Solution
+    instance: CGSHOP2027Instance,
+    solution: CGSHOP2027Solution,
+    *,
+    bare: bool = False,
 ) -> Figure:
     """
     Plots a solution: the area the cutters sweep, the gaps they leave, and the
-    trajectory of each cutter.
+    tour of each cutter.
+
+    :param bare: Draw the region, the coverage and the tours alone, without
+                 axes, grid or titles -- the verdict included, so a gap then
+                 shows only as the red it is drawn in.
     """
     validator = SolutionValidator(instance)
     errors = validator.check_for_errors(solution)
@@ -248,19 +315,19 @@ def create_solution_plot(
 
     palette = colormaps["tab10"]
     outline = _cutter_outline(instance)
-    for index, path in enumerate(solution.cutters):
+    for index, tour in enumerate(solution.tours):
         color = palette(index % palette.N)
-        waypoints = list(path.waypoints())
+        ring = _closed(tour)
         ax.plot(
-            [x for x, _ in waypoints],
-            [y for _, y in waypoints],
+            [x for x, _ in ring],
+            [y for _, y in ring],
             color=color,
             linewidth=1.2,
             zorder=4,
         )
         ax.plot(
-            [path.start[0]],
-            [path.start[1]],
+            [tour.start[0]],
+            [tour.start[1]],
             marker="o",
             color=color,
             markersize=5,
@@ -268,7 +335,7 @@ def create_solution_plot(
         )
         ax.add_patch(
             PolygonPatch(
-                _placed(outline, path.start),
+                _placed(outline, tour.start),
                 closed=True,
                 facecolor="none",
                 edgecolor=color,
@@ -283,7 +350,7 @@ def create_solution_plot(
         _union_bounds(
             _region_bounds(instance.region_to_cover),
             _drawn_bounds(swept),
-            _trajectory_bounds(solution),
+            _tour_bounds(solution),
         ),
     )
     verdict = (
@@ -293,12 +360,16 @@ def create_solution_plot(
     )
     _style_axes(
         ax,
-        f"{len(solution.cutters)} cutters — {len(uncovered)} cells uncovered",
+        f"{len(solution.tours)} tours, longest {solution.max_tour_length} ("
+        f"{len(uncovered)} cells uncovered)",
+        bare=bare,
     )
-    fig.suptitle(
-        f"CG:SHOP 2027 solution for {instance.instance_uid}: {verdict}", fontsize=11
+    _finish(
+        fig,
+        f"CG:SHOP 2027 solution for {instance.instance_uid}: {verdict}",
+        bare=bare,
+        ax=ax,
     )
-    fig.tight_layout()
     return fig
 
 
@@ -308,28 +379,35 @@ def create_solution_animation(
     step: int | None = None,
     max_frames: int = 300,
     interval: int = 120,
+    *,
+    bare: bool = False,
 ) -> FuncAnimation:
     """
-    Animates the cutters moving along their trajectories, filling in the area
-    they have swept so far.
+    Animates the cutters moving along their tours, filling in the area they
+    have swept so far.
 
-    :param step: Time units between frames. Derived from `max_frames` if omitted.
+    All cutters travel at the same speed, one unit per step, so the animation
+    runs for as many steps as the longest tour is long; a cutter that is
+    already back where it started simply stays there.
+
+    :param step: Units of travel between frames. Derived from `max_frames` if
+                 omitted.
     :param max_frames: Frame budget used to pick `step`; the animation may end
-                       up with one more frame, since the final time is always
+                       up with one more frame, since the final step is always
                        shown.
     :param interval: Delay between frames in milliseconds.
+    :param bare: Draw the region, the coverage and the cutters alone, without
+                 axes, grid or titles -- the step counter included.
     """
     validator = SolutionValidator(instance)
-    makespan = max((path.duration for path in solution.cutters), default=0)
-    stride = step if step is not None else math.ceil((makespan + 1) / max_frames)
+    total = solution.max_tour_length
+    stride = step if step is not None else math.ceil((total + 1) / max_frames)
     stride = max(1, stride)
-    times = list(range(0, makespan + 1, stride))
-    if times[-1] != makespan:
-        times.append(makespan)
+    shown = list(range(0, total + 1, stride))
+    if shown[-1] != total:
+        shown.append(total)
 
-    # The same padding as the collision check uses, so a cutter that is done is
-    # drawn where the verifier considers it to be.
-    trajectories = [_trajectory(path, makespan)[0] for path in solution.cutters]
+    walks = [_walk(tour, total) for tour in solution.tours]
     swept = validator.swept_cells(solution)
     covered = np.zeros_like(swept.mask)
 
@@ -350,19 +428,19 @@ def create_solution_animation(
     palette = colormaps["tab10"]
     outline = _cutter_outline(instance)
     patches = []
-    for index, path in enumerate(solution.cutters):
+    for index, tour in enumerate(solution.tours):
         color = palette(index % palette.N)
-        waypoints = list(path.waypoints())
+        ring = _closed(tour)
         ax.plot(
-            [x for x, _ in waypoints],
-            [y for _, y in waypoints],
+            [x for x, _ in ring],
+            [y for _, y in ring],
             color=color,
             linewidth=1.0,
             alpha=0.45,
             zorder=2,
         )
         patch = PolygonPatch(
-            _placed(outline, path.start),
+            _placed(outline, tour.start),
             closed=True,
             facecolor=color,
             edgecolor=_REGION_EDGE,
@@ -378,17 +456,17 @@ def create_solution_animation(
         _union_bounds(
             _region_bounds(instance.region_to_cover),
             _drawn_bounds(swept),
-            _trajectory_bounds(solution),
+            _tour_bounds(solution),
         ),
     )
-    _style_axes(ax)
-    fig.suptitle(f"CG:SHOP 2027 solution for {instance.instance_uid}", fontsize=11)
+    _style_axes(ax, bare=bare)
+    _finish(fig, f"CG:SHOP 2027 solution for {instance.instance_uid}", bare=bare, ax=ax)
 
     stamped_until = -1
 
     def stamp(first: int, last: int) -> None:
         """Adds every placement in `first .. last` to the covered area."""
-        for positions in trajectories:
+        for positions in walks:
             anchors = _anchor_cells(positions[first : last + 1])
             if anchors is None:
                 continue
@@ -397,21 +475,22 @@ def create_solution_animation(
 
     def update(frame: int):
         nonlocal stamped_until
-        time = times[frame]
-        if time < stamped_until:  # the animation looped back to the start
+        travelled = shown[frame]
+        if travelled < stamped_until:  # the animation looped back to the start
             covered[:] = False
             stamped_until = -1
         # Every intermediate placement is stamped, so a large stride never
         # makes the coverage lag behind the cutters.
-        stamp(stamped_until + 1, time)
-        stamped_until = time
+        stamp(stamped_until + 1, travelled)
+        stamped_until = travelled
         image.set_data(_as_image(covered))
-        for patch, positions in zip(patches, trajectories, strict=True):
-            patch.set_xy(_placed(outline, positions[time]))
-        ax.set_title(f"time {time} / {makespan}", fontsize=9, pad=4)
+        for patch, positions in zip(patches, walks, strict=True):
+            patch.set_xy(_placed(outline, positions[travelled]))
+        if not bare:
+            ax.set_title(f"step {travelled} / {total}", fontsize=9, pad=4)
         return [image, *patches]
 
-    return FuncAnimation(fig, update, frames=len(times), interval=interval, blit=False)
+    return FuncAnimation(fig, update, frames=len(shown), interval=interval, blit=False)
 
 
 def _anchor_cells(positions: np.ndarray) -> CellSet | None:

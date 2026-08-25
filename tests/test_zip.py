@@ -23,7 +23,7 @@ REGION = {
     "inner_boundaries": [],
 }
 CUTTER = {"x": [0, 1, 1, 0], "y": [0, 0, 1, 1]}
-SWEEP = [("E", 2), ("N", 1), ("W", 2), ("N", 1), ("E", 2), ("W", 2), ("S", 2)]
+SWEEP = {"x": [0, 2, 2, 0, 0, 2, 2, 0], "y": [0, 0, 1, 1, 2, 2, 3, 3]}
 
 
 def make_instance(uid: str = "demo") -> CGSHOP2027Instance:
@@ -37,9 +37,7 @@ def make_instance(uid: str = "demo") -> CGSHOP2027Instance:
 
 
 def make_solution(uid: str = "demo") -> CGSHOP2027Solution:
-    return CGSHOP2027Solution(
-        instance_uid=uid, cutters=[{"start": (0, 0), "steps": SWEEP}]
-    )
+    return CGSHOP2027Solution(instance_uid=uid, tours=[SWEEP])
 
 
 def write_solutions(path: Path, *uids: str) -> Path:
@@ -100,7 +98,7 @@ def test_solutions_survive_a_zip_round_trip(tmp_path: Path):
     assert len(read_back) == 2
     for solution in read_back:
         expected = originals[solution.instance_uid]
-        assert solution.cutters == expected.cutters
+        assert solution.tours == expected.tours
         assert solution.content_type == expected.content_type
 
 
@@ -170,7 +168,7 @@ def test_a_solution_violating_the_schema_is_rejected(tmp_path: Path):
     """A well-formed JSON document still has to satisfy the solution schema."""
     path = write_raw(
         tmp_path / "solutions.zip",
-        {"alpha.solution.json": '{"instance_uid": "alpha", "cutters": [[1, 2]]}'},
+        {"alpha.solution.json": '{"instance_uid": "alpha", "tours": [[1, 2]]}'},
     )
     with pytest.raises(BadSolutionFile):
         list(ZipSolutionIterator(path))
