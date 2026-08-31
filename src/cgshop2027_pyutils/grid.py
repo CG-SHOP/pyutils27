@@ -18,7 +18,14 @@ from shapely.ops import unary_union
 
 from .schemas.instance import PointSequence, PolyominoWithHoles
 
-__all__ = ["CellSet", "dilate", "rasterize", "rasterize_ring"]
+__all__ = [
+    "CellCounts",
+    "CellSet",
+    "dilate",
+    "dilate_counts",
+    "rasterize",
+    "rasterize_ring",
+]
 
 
 @dataclass(frozen=True)
@@ -116,6 +123,44 @@ class CellSet:
         return unary_union([box(x, y, x + 1, y + 1) for x, y in self.cells()])
 
 
+@dataclass(frozen=True)
+class CellCounts:
+    """
+    A multiplicity for every cell of a bounding box: not whether something
+    covers the cell, but how often it does.
+
+    Laid out exactly like `CellSet` -- `counts[row, col]` is the cell at
+    `(origin[0] + col, origin[1] + row)` -- so the two index alike and
+    `nonzero()` reads the box back as the cell set it counts over.
+    """
+
+    counts: np.ndarray
+    origin: tuple[int, int]
+
+    @property
+    def width(self) -> int:
+        return int(self.counts.shape[1])
+
+    @property
+    def height(self) -> int:
+        return int(self.counts.shape[0])
+
+    @property
+    def bounds(self) -> tuple[int, int, int, int]:
+        """As `CellSet.bounds`: the last cell that fits, not one past it."""
+        x, y = self.origin
+        return (x, y, x + self.width - 1, y + self.height - 1)
+
+    @property
+    def maximum(self) -> int:
+        """The highest count on the grid, or 0 if there is nothing on it."""
+        return int(self.counts.max()) if self.counts.size else 0
+
+    def nonzero(self) -> CellSet:
+        """The cells counted at least once, over the same box."""
+        return CellSet(self.counts > 0, self.origin)
+
+
 def _combine(a: CellSet, b: CellSet, op) -> CellSet:
     """
     Applies a binary boolean operation to two cell sets over the union of their
@@ -142,16 +187,51 @@ def _blit(
     """
     ORs `source` into `target`, clipping whatever falls outside.
     """
+    overlap = _overlap(target, target_origin, source, source_origin)
+    if overlap is None:
+        return
+    into, out_of = overlap
+    target[into] |= source[out_of]
+
+
+def _blit_counts(
+    target: np.ndarray,
+    target_origin: tuple[int, int],
+    source: np.ndarray,
+    source_origin: tuple[int, int],
+) -> None:
+    """
+    Adds `source` into `target`, clipping whatever falls outside; the
+    counting twin of `_blit`.
+    """
+    overlap = _overlap(target, target_origin, source, source_origin)
+    if overlap is None:
+        return
+    into, out_of = overlap
+    target[into] += source[out_of]
+
+
+def _overlap(
+    target: np.ndarray,
+    target_origin: tuple[int, int],
+    source: np.ndarray,
+    source_origin: tuple[int, int],
+) -> tuple[tuple[slice, slice], tuple[slice, slice]] | None:
+    """
+    Where the two grids meet, as the slice of each; `None` if they miss each
+    other entirely.
+    """
     dx = source_origin[0] - target_origin[0]
     dy = source_origin[1] - target_origin[1]
     height, width = source.shape
     rows = slice(max(dy, 0), min(dy + height, target.shape[0]))
     cols = slice(max(dx, 0), min(dx + width, target.shape[1]))
     if rows.start >= rows.stop or cols.start >= cols.stop:
-        return
-    target[rows, cols] |= source[
-        rows.start - dy : rows.stop - dy, cols.start - dx : cols.stop - dx
-    ]
+        return None
+    return (rows, cols), (
+        slice(rows.start - dy, rows.stop - dy),
+        slice(cols.start - dx, cols.stop - dx),
+    )
 
 
 def rasterize_ring(ring: PointSequence) -> CellSet:
@@ -250,3 +330,48 @@ def dilate(cells: CellSet, structuring: CellSet) -> CellSet:
         col = x - structuring.origin[0]
         result[row : row + cells.height, col : col + swept.shape[1]] |= swept
     return CellSet(result, (x_min, y_min))
+
+
+def _sum_horizontally(counts: np.ndarray, length: int) -> np.ndarray:
+    """
+    The sum of `counts` shifted east by `0 .. length - 1`, via a prefix sum
+    so that the cost does not depend on `length`.
+
+    The counting twin of `_dilate_horizontally`: where that one asks whether
+    any of the shifted copies covers a cell, this one adds up how many do.
+    """
+    height, width = counts.shape
+    prefix = np.zeros((height, width + 1), dtype=np.int64)
+    np.cumsum(counts, axis=1, dtype=np.int64, out=prefix[:, 1:])
+    columns = np.arange(width + length - 1)
+    high = np.minimum(columns + 1, width)
+    low = np.maximum(columns - length + 1, 0)
+    return prefix[:, high] - prefix[:, low]
+
+
+def dilate_counts(cells: CellCounts, structuring: CellSet) -> CellCounts:
+    """
+    `dilate` with multiplicities: each cell of the result counts the
+    placements of `structuring` covering it, so a cell that two placements
+    reach comes out as 2 where `dilate` would only say `True`.
+
+    The runs of `structuring` partition its cells, so adding one window sum
+    per run counts every placement exactly once.
+    """
+    height, width = cells.counts.shape
+    result = np.zeros(
+        (height + structuring.height - 1, width + structuring.width - 1),
+        dtype=np.int64,
+    )
+    for x, y, length in _horizontal_runs(structuring):
+        summed = _sum_horizontally(cells.counts, length)
+        row = y - structuring.origin[1]
+        col = x - structuring.origin[0]
+        result[row : row + height, col : col + summed.shape[1]] += summed
+    return CellCounts(
+        result,
+        (
+            cells.origin[0] + structuring.origin[0],
+            cells.origin[1] + structuring.origin[1],
+        ),
+    )

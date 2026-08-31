@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 from shapely.geometry import Polygon
 
-from cgshop2027_pyutils.grid import CellSet, dilate, rasterize, rasterize_ring
+from cgshop2027_pyutils.grid import (
+    CellCounts,
+    CellSet,
+    dilate,
+    dilate_counts,
+    rasterize,
+    rasterize_ring,
+)
 from cgshop2027_pyutils.schemas.instance import PointSequence, PolyominoWithHoles
 
 SQUARE = {"x": [0, 5, 5, 0], "y": [0, 0, 5, 5]}
@@ -148,3 +155,81 @@ def test_dilate_matches_the_naive_sum():
         assert set(dilate(cells, structuring).cells()) == naive_dilate(
             cells, structuring
         )
+
+
+# --------------------------------------------------------------------------
+# CellCounts and dilate_counts
+# --------------------------------------------------------------------------
+
+
+def counted(cells: CellSet) -> CellCounts:
+    """The cell set as a count grid, every cell counted once."""
+    return CellCounts(cells.mask.astype(np.int64), cells.origin)
+
+
+def naive_counts(cells: CellSet, structuring: CellSet) -> dict[tuple[int, int], int]:
+    """Every placement stamped one at a time, counting how often each lands."""
+    tally: dict[tuple[int, int], int] = {}
+    for cx, cy in cells.cells():
+        for sx, sy in structuring.cells():
+            tally[(cx + sx, cy + sy)] = tally.get((cx + sx, cy + sy), 0) + 1
+    return tally
+
+
+def as_dict(counts: CellCounts) -> dict[tuple[int, int], int]:
+    rows, cols = np.nonzero(counts.counts)
+    return {
+        (counts.origin[0] + col, counts.origin[1] + row): int(counts.counts[row, col])
+        for row, col in zip(rows.tolist(), cols.tolist(), strict=True)
+    }
+
+
+def test_cell_counts_reports_its_box_like_a_cell_set():
+    counts = CellCounts(np.array([[0, 2], [1, 0]]), (4, 7))
+    assert counts.bounds == (4, 7, 5, 8)
+    assert (counts.width, counts.height) == (2, 2)
+    assert counts.maximum == 2
+
+
+def test_cell_counts_reads_back_as_the_set_it_counts():
+    counts = CellCounts(np.array([[0, 2], [1, 0]]), (4, 7))
+    assert set(counts.nonzero().cells()) == {(5, 7), (4, 8)}
+
+
+def test_an_empty_grid_has_no_maximum():
+    assert CellCounts(np.zeros((0, 0), dtype=np.int64), (0, 0)).maximum == 0
+
+
+@pytest.mark.parametrize("structuring", [SQUARE, L_SHAPE, STAIRCASE])
+def test_dilate_counts_matches_stamping_one_placement_at_a_time(structuring):
+    cells = rasterize_ring(ring(STAIRCASE))
+    shape = rasterize_ring(ring(structuring))
+    assert as_dict(dilate_counts(counted(cells), shape)) == naive_counts(cells, shape)
+
+
+@pytest.mark.parametrize("structuring", [SQUARE, L_SHAPE, STAIRCASE])
+def test_dilate_counts_covers_exactly_what_dilate_covers(structuring):
+    """
+    The counting version must not reach a cell the boolean one misses, nor
+    miss one it reaches; only the multiplicity is new.
+    """
+    cells = rasterize_ring(ring(STAIRCASE))
+    shape = rasterize_ring(ring(structuring))
+    counts = dilate_counts(counted(cells), shape)
+    assert set(counts.nonzero().cells()) == set(dilate(cells, shape).cells())
+
+
+def test_dilate_counts_carries_multiplicities_through():
+    """A cell that starts at 3 contributes 3 to everything it reaches."""
+    cells = CellSet(np.array([[True]]), (0, 0))
+    shape = rasterize_ring(ring(L_SHAPE))
+    once = dilate_counts(counted(cells), shape)
+    thrice = dilate_counts(CellCounts(np.array([[3]]), (0, 0)), shape)
+    assert as_dict(thrice) == {cell: 3 * n for cell, n in as_dict(once).items()}
+
+
+def test_dilate_counts_by_a_single_cell_is_a_translation():
+    cells = rasterize_ring(ring(STAIRCASE))
+    shifted = dilate_counts(counted(cells), CellSet(np.array([[True]]), (2, -3)))
+    assert set(shifted.nonzero().cells()) == set(cells.translated(2, -3).cells())
+    assert shifted.maximum == 1
