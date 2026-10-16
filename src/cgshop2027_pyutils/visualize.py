@@ -11,12 +11,17 @@ Usage:
 - `create_solution_animation(instance, solution)` for the cutters moving along
   their tours, filling in coverage as they go.
 
+The two solution views draw the swept area in one flat colour by default;
+`coverage="shaded"` colours it per cutter instead, graded by how often each
+cell was passed over, at a cost that grows with the number of cutters.
+
 Every one of them takes `bare=True`, which strips the figure down to the
 drawing itself -- no axes, no grid, no titles -- for a picture that goes into a
 paper or a slide rather than in front of someone debugging.
 """
 
 import math
+from typing import Literal, get_args
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,12 +41,13 @@ from matplotlib.patches import PathPatch
 from matplotlib.patches import Polygon as PolygonPatch
 from matplotlib.path import Path as MplPath
 
-from .grid import CellCounts, CellSet, _blit_counts, dilate_counts
+from .grid import CellCounts, CellSet, _blit, _blit_counts, dilate, dilate_counts
 from .schemas import CGSHOP2027Instance, CGSHOP2027Solution, CutterTour
 from .schemas.instance import PointSequence, PolyominoWithHoles
 from .verify import SolutionValidator
 
 __all__ = [
+    "CoverageStyle",
     "create_instance_plot",
     "create_solution_animation",
     "create_solution_plot",
@@ -50,10 +56,17 @@ __all__ = [
 # Anything matplotlib accepts as a colour; here a hex string or an RGB(A) tuple.
 _Color = str | tuple[float, ...]
 
+# How the swept area is drawn: "flat" as one area in one colour, "shaded" per
+# cutter and by how often each cell was passed over. Shading needs a count
+# grid per cutter, which costs time and memory in proportion to the number of
+# cutters, so it is asked for rather than the default.
+CoverageStyle = Literal["flat", "shaded"]
+
 _REGION_FACE = "#d9d9d9"
 _REGION_EDGE = "#404040"
 _UNCOVERED = "#d62728"
 _CUTTER = "#1f77b4"
+_SWEPT = "#7fbf7f"
 # The two ends of a cutter's coverage ramp, as distances from its own colour:
 # washed out towards white where it passed once, pushed towards black where it
 # passed most. The span has to be wide enough that one more pass is a visible
@@ -453,6 +466,14 @@ def _scale_max(visits: list[CellCounts]) -> int:
     return max(max((grid.maximum for grid in visits), default=1), 2)
 
 
+def _is_shaded(coverage: CoverageStyle) -> bool:
+    """Whether `coverage` asks for shading; rejects anything but the styles."""
+    if coverage not in get_args(CoverageStyle):
+        msg = f"coverage must be one of {get_args(CoverageStyle)}, not {coverage!r}."
+        raise ValueError(msg)
+    return coverage == "shaded"
+
+
 def create_instance_plot(instance: CGSHOP2027Instance, *, bare: bool = False) -> Figure:
     """
     Plots the region to cover next to the cutter shape.
@@ -516,26 +537,29 @@ def create_solution_plot(
     instance: CGSHOP2027Instance,
     solution: CGSHOP2027Solution,
     *,
+    coverage: CoverageStyle = "flat",
     bare: bool = False,
 ) -> Figure:
     """
     Plots a solution: the area the cutters sweep, the gaps they leave, and the
     tour of each cutter.
 
-    Each cutter fills the area it sweeps in its own colour, shaded by how
-    often it passed over each cell: nearly white where it went by once, the
-    full colour over the cell it worked hardest. The scale is shared by all
-    cutters, and where two of them sweep the same cell their fills overlap.
-
+    :param coverage: `"flat"` fills the swept area in a single colour.
+                     `"shaded"` has each cutter fill the area it sweeps in its
+                     own colour, shaded by how often it passed over each cell:
+                     nearly white where it went by once, the full colour over
+                     the cell it worked hardest. The scale is shared by all
+                     cutters, and where two of them sweep the same cell their
+                     fills overlap. It takes a count grid per cutter, so it
+                     costs time and memory in proportion to their number.
     :param bare: Draw the region, the coverage and the tours alone, without
                  axes, grid or titles -- the verdict included, so a gap then
                  shows only as the red it is drawn in.
     """
+    shaded = _is_shaded(coverage)
     validator = SolutionValidator(instance)
     errors = validator.check_for_errors(solution)
     swept = validator.swept_cells(solution)
-    visits = _visit_counts(validator, solution)
-    busiest = _scale_max(visits)
     uncovered = validator.uncovered_cells(solution)
     palette = colormaps["tab10"]
 
@@ -543,15 +567,20 @@ def create_solution_plot(
     # The swept area is not clipped to the region, so effort spent just outside
     # it is visible too. It is clipped to the region's neighbourhood by the
     # verifier though, so a longer excursion shows only as a trajectory.
-    for index, counted in enumerate(visits):
-        _draw_counts(
-            ax,
-            counted,
-            palette(index % palette.N),
-            busiest,
-            alpha=_SWEPT_ALPHA,
-            zorder=1,
-        )
+    if shaded:
+        visits = _visit_counts(validator, solution)
+        busiest = _scale_max(visits)
+        for index, counted in enumerate(visits):
+            _draw_counts(
+                ax,
+                counted,
+                palette(index % palette.N),
+                busiest,
+                alpha=_SWEPT_ALPHA,
+                zorder=1,
+            )
+    else:
+        _draw_cells(ax, swept, _SWEPT, alpha=0.55, zorder=1)
     _draw_cells(ax, uncovered, _UNCOVERED, alpha=0.85, zorder=2)
     _draw_region_outline(ax, instance)
     _draw_tours(ax, instance, solution, palette, moving=False)
@@ -591,15 +620,12 @@ def create_solution_animation(
     max_frames: int = 300,
     interval: int = 120,
     *,
+    coverage: CoverageStyle = "flat",
     bare: bool = False,
 ) -> FuncAnimation:
     """
     Animates the cutters moving along their tours, filling in the area they
     have swept so far.
-
-    Each cutter fills in the area it has swept in its own colour, deepening a
-    cell every time it comes back over it, so both who covered what and how
-    hard they worked at it stay readable as the coverage grows.
 
     All cutters travel at the same speed, one unit per step, so the animation
     runs for as many steps as the longest tour is long; a cutter that is
@@ -611,9 +637,15 @@ def create_solution_animation(
                        up with one more frame, since the final step is always
                        shown.
     :param interval: Delay between frames in milliseconds.
+    :param coverage: As for `create_solution_plot`. With `"shaded"`, each
+                     cutter fills in what it has swept in its own colour,
+                     deepening a cell every time it comes back over it. Either
+                     way, the last frame leaves exactly the coverage the plot
+                     draws in the same style.
     :param bare: Draw the region, the coverage and the cutters alone, without
                  axes, grid or titles -- the step counter included.
     """
+    shaded = _is_shaded(coverage)
     validator = SolutionValidator(instance)
     total = solution.max_tour_length
     stride = step if step is not None else math.ceil((total + 1) / max_frames)
@@ -633,25 +665,12 @@ def create_solution_animation(
     # touch the region, and the plot's counts leave those placements out too.
     reachable = validator.reachable_anchors(solution)
     palette = colormaps["tab10"]
-    # Fixed up front from the finished counts, so that a cell does not change
-    # shade as the scale it is measured against grows under it.
-    busiest = _scale_max(_visit_counts(validator, solution))
-    # The layers share the union's origin and extent, so they line up both with
-    # each other and with the blits that fill them in.
-    covered = [np.zeros(swept.mask.shape, dtype=np.int64) for _ in solution.tours]
 
     fig, ax = plt.subplots(figsize=(9, 9))
-    images = [
-        _draw_counts(
-            ax,
-            CellCounts(layer, swept.origin),
-            palette(index % palette.N),
-            busiest,
-            alpha=_SWEPT_ALPHA,
-            zorder=1,
-        )
-        for index, layer in enumerate(covered)
-    ]
+    covered, images = _coverage_layers(
+        ax, validator, solution, swept, palette, shaded=shaded
+    )
+    as_image = _as_count_image if shaded else _as_image
     _draw_region_outline(ax, instance)
     patches = _draw_tours(ax, instance, solution, palette, moving=True)
     outline = _cutter_outline(instance)
@@ -670,16 +689,22 @@ def create_solution_animation(
     stamped_until = -1
 
     def stamp(first: int, last: int) -> None:
-        """Adds every placement in `first .. last` to each cutter's counts."""
-        for positions, layer, limit in zip(walks, covered, steps, strict=True):
+        """Adds every placement in `first .. last` to the coverage layers."""
+        for index, (positions, limit) in enumerate(zip(walks, steps, strict=True)):
             walked = positions[first : min(last + 1, limit)]
             if len(walked):
                 walked = walked[reachable.contains_points(walked)]
             visited = _visited_anchors(walked)
             if visited is None:
                 continue
-            painted = dilate_counts(visited, validator.cutter)
-            _blit_counts(layer, swept.origin, painted.counts, painted.origin)
+            if shaded:
+                counted = dilate_counts(visited, validator.cutter)
+                _blit_counts(
+                    covered[index], swept.origin, counted.counts, counted.origin
+                )
+            else:
+                painted = dilate(visited.nonzero(), validator.cutter)
+                _blit(covered[0], swept.origin, painted.mask, painted.origin)
 
     def update(frame: int):
         nonlocal stamped_until
@@ -693,7 +718,7 @@ def create_solution_animation(
         stamp(stamped_until + 1, travelled)
         stamped_until = travelled
         for image, layer in zip(images, covered, strict=True):
-            image.set_data(_as_count_image(layer))
+            image.set_data(as_image(layer))
         for patch, positions in zip(patches, walks, strict=True):
             patch.set_xy(_placed(outline, positions[travelled]))
         if not bare:
@@ -701,6 +726,47 @@ def create_solution_animation(
         return [*images, *patches]
 
     return FuncAnimation(fig, update, frames=len(shown), interval=interval, blit=False)
+
+
+def _coverage_layers(
+    ax: Axes,
+    validator: SolutionValidator,
+    solution: CGSHOP2027Solution,
+    swept: CellSet,
+    palette: Colormap,
+    *,
+    shaded: bool,
+) -> tuple[list[np.ndarray], list[AxesImage]]:
+    """
+    The blank layers an animation fills in, and the rasters that show them:
+    one count grid per cutter when shaded, else a single mask that every
+    cutter paints into.
+
+    The layers share the swept area's origin and extent, so they line up both
+    with each other and with the blits that fill them in.
+    """
+    if not shaded:
+        layer = np.zeros(swept.mask.shape, dtype=bool)
+        image = _draw_cells(
+            ax, CellSet(layer, swept.origin), _SWEPT, alpha=0.55, zorder=1
+        )
+        return [layer], [image]
+    # Fixed up front from the finished counts, so that a cell does not change
+    # shade as the scale it is measured against grows under it.
+    busiest = _scale_max(_visit_counts(validator, solution))
+    layers = [np.zeros(swept.mask.shape, dtype=np.int64) for _ in solution.tours]
+    images = [
+        _draw_counts(
+            ax,
+            CellCounts(layer, swept.origin),
+            palette(index % palette.N),
+            busiest,
+            alpha=_SWEPT_ALPHA,
+            zorder=1,
+        )
+        for index, layer in enumerate(layers)
+    ]
+    return layers, images
 
 
 def _visited_anchors(positions: np.ndarray) -> CellCounts | None:

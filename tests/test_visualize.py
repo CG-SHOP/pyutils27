@@ -90,6 +90,12 @@ def make_solution(*tours):
     return CGSHOP2027Solution(instance_uid="demo", tours=list(tours) or [FULL_SWEEP])
 
 
+@pytest.fixture(params=["flat", "shaded"])
+def coverage(request) -> str:
+    """Runs a test once per coverage style, for what has to hold in either."""
+    return request.param
+
+
 def renders(figure: Figure) -> bool:
     """Draws the figure to prove the artists survive a real render pass."""
     figure.savefig(BytesIO(), format="png", dpi=50)
@@ -133,33 +139,38 @@ def test_instance_plot_reports_the_cell_counts():
 # --------------------------------------------------------------------------
 
 
-def test_solution_plot_renders():
-    assert renders(create_solution_plot(make_instance(), make_solution()))
+def test_solution_plot_renders(coverage):
+    assert renders(
+        create_solution_plot(make_instance(), make_solution(), coverage=coverage)
+    )
 
 
-def test_solution_plot_reports_a_feasible_solution():
-    figure = create_solution_plot(make_instance(), make_solution())
+def test_solution_plot_reports_a_feasible_solution(coverage):
+    figure = create_solution_plot(make_instance(), make_solution(), coverage=coverage)
     assert "feasible" in figure.get_suptitle()
     assert "0 cells uncovered" in figure.axes[0].get_title()
 
 
-def test_solution_plot_reports_the_gaps_of_an_incomplete_solution():
-    figure = create_solution_plot(make_instance(), make_solution(boustrophedon(rows=2)))
+def test_solution_plot_reports_the_gaps_of_an_incomplete_solution(coverage):
+    figure = create_solution_plot(
+        make_instance(), make_solution(boustrophedon(rows=2)), coverage=coverage
+    )
     assert "1 error" in figure.get_suptitle()
     assert "8 cells uncovered" in figure.axes[0].get_title()
 
 
-def test_solution_plot_renders_holes_and_several_cutters():
+def test_solution_plot_renders_holes_and_several_cutters(coverage):
     solution = make_solution(boustrophedon(rows=2), boustrophedon(y0=2, rows=2))
-    assert renders(
-        create_solution_plot(make_instance(holes=[HOLE], cutters=2), solution)
-    )
+    instance = make_instance(holes=[HOLE], cutters=2)
+    assert renders(create_solution_plot(instance, solution, coverage=coverage))
 
 
-def test_solution_plot_includes_area_swept_outside_the_region():
+def test_solution_plot_includes_area_swept_outside_the_region(coverage):
     """The view has to grow to fit a cutter that wanders off."""
     detour = tour((0, 0), (-3, 0))
-    figure = create_solution_plot(make_instance(), make_solution(detour))
+    figure = create_solution_plot(
+        make_instance(), make_solution(detour), coverage=coverage
+    )
     x_min, _ = figure.axes[0].get_xlim()
     assert x_min <= -3
 
@@ -193,7 +204,9 @@ TWO_CUTTERS = (boustrophedon(rows=2), boustrophedon(y0=2, rows=2))
 
 
 def two_cutter_plot():
-    return create_solution_plot(make_instance(cutters=2), make_solution(*TWO_CUTTERS))
+    return create_solution_plot(
+        make_instance(cutters=2), make_solution(*TWO_CUTTERS), coverage="shaded"
+    )
 
 
 def test_each_cutter_gets_its_own_coverage_layer():
@@ -242,7 +255,8 @@ def test_every_cutter_is_measured_against_the_same_scale():
     grids = _visit_counts(SolutionValidator(instance), solution)
     # Without this the test would hold for a per-cutter scale just as well.
     assert grids[0].maximum != grids[1].maximum
-    rasters = coverage_rasters(create_solution_plot(instance, solution).axes[0])
+    figure = create_solution_plot(instance, solution, coverage="shaded")
+    rasters = coverage_rasters(figure.axes[0])
     assert len({(r.norm.vmin, r.norm.vmax) for r in rasters[:2]}) == 1
 
 
@@ -251,10 +265,12 @@ def test_a_cell_swept_once_is_shaded_the_same_whatever_the_busiest_cell():
     The light end stands for a single pass, not for `1 / busiest`, so a picture
     of a tidy solution is not washed out by a wasteful one.
     """
-    tidy = create_solution_plot(make_instance(), make_solution())
+    tidy = create_solution_plot(make_instance(), make_solution(), coverage="shaded")
     # A tour that keeps going back over the same row raises the busiest count.
     wasteful = create_solution_plot(
-        make_instance(), make_solution(boustrophedon(rows=4, width=1))
+        make_instance(),
+        make_solution(boustrophedon(rows=4, width=1)),
+        coverage="shaded",
     )
     (a, *_), (b, *_) = (coverage_rasters(figure.axes[0]) for figure in (tidy, wasteful))
     assert shade(a, 1) == pytest.approx(shade(b, 1))
@@ -264,7 +280,9 @@ def test_the_scale_spans_at_least_two_passes():
     """With nothing covered twice there is no range to grade, and no crash."""
     (raster, *_) = coverage_rasters(
         create_solution_plot(
-            make_instance(size=1), make_solution(tour((0, 0), (1, 0)))
+            make_instance(size=1),
+            make_solution(tour((0, 0), (1, 0))),
+            coverage="shaded",
         ).axes[0]
     )
     assert raster.norm.vmax >= 2
@@ -346,7 +364,7 @@ def test_placements_outside_the_regions_reach_are_left_out():
 
 def test_the_animation_paints_one_raster_per_cutter():
     animation = create_solution_animation(
-        make_instance(cutters=2), make_solution(*TWO_CUTTERS)
+        make_instance(cutters=2), make_solution(*TWO_CUTTERS), coverage="shaded"
     )
     rasters = coverage_rasters(animation._fig.axes[0])
     assert len(rasters) == 2
@@ -372,7 +390,9 @@ def test_the_animation_ends_on_exactly_the_counts_the_plot_draws(
         tour((0, 0), (-30, 0), (-30, 1), (0, 1)) if wanders else tour((0, 0), (1, 0))
     )
     solution = make_solution(short, boustrophedon(rows=4))
-    animation = create_solution_animation(instance, solution, max_frames=max_frames)
+    animation = create_solution_animation(
+        instance, solution, max_frames=max_frames, coverage="shaded"
+    )
     for frame in frames_of(animation):
         artists = animation._func(frame)
     rasters = rasters_of(animation, artists)
@@ -395,13 +415,73 @@ def test_the_animated_scale_does_not_shift_as_coverage_grows():
     instead of being repainted every time some other cell overtakes it.
     """
     animation = create_solution_animation(
-        make_instance(cutters=2), make_solution(*TWO_CUTTERS)
+        make_instance(cutters=2), make_solution(*TWO_CUTTERS), coverage="shaded"
     )
     rasters = coverage_rasters(animation._fig.axes[0])
     before = [(r.norm.vmin, r.norm.vmax) for r in rasters]
     for frame in frames_of(animation):
         animation._func(frame)
     assert [(r.norm.vmin, r.norm.vmax) for r in rasters] == before
+
+
+# --------------------------------------------------------------------------
+# choosing between the coverage styles
+# --------------------------------------------------------------------------
+
+
+def test_flat_coverage_is_the_default_and_one_raster_for_all_cutters():
+    instance, solution = make_instance(cutters=2), make_solution(*TWO_CUTTERS)
+    default = create_solution_plot(instance, solution)
+    flat = create_solution_plot(instance, solution, coverage="flat")
+    for figure in (default, flat):
+        # The swept area and the uncovered cells, however many cutters there are.
+        assert len(coverage_rasters(figure.axes[0])) == 2
+    animation = create_solution_animation(instance, solution)
+    assert len(coverage_rasters(animation._fig.axes[0])) == 1
+
+
+def test_flat_coverage_never_counts_passes(monkeypatch):
+    """
+    What keeps the flat style cheap is that it never builds a count grid per
+    cutter, so it must not quietly pay for one anyway.
+    """
+
+    def counting(*_):
+        msg = "flat coverage built a count grid"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr("cgshop2027_pyutils.visualize._visit_counts", counting)
+    monkeypatch.setattr("cgshop2027_pyutils.visualize.dilate_counts", counting)
+    instance, solution = make_instance(cutters=2), make_solution(*TWO_CUTTERS)
+    create_solution_plot(instance, solution)
+    animation = create_solution_animation(instance, solution)
+    for frame in frames_of(animation):
+        animation._func(frame)
+
+
+def test_both_styles_paint_the_same_cells():
+    """Shading changes how the swept area looks, never which cells it holds."""
+    instance = make_instance(size=6, cutter=BLOCK_CUTTER, cutters=2)
+    # One cutter wanders out of the region's reach, where both have to clip.
+    solution = make_solution(
+        tour((0, 0), (-30, 0), (-30, 1), (0, 1)), boustrophedon(rows=4)
+    )
+    (flat, _) = coverage_rasters(create_solution_plot(instance, solution).axes[0])
+    shaded = coverage_rasters(
+        create_solution_plot(instance, solution, coverage="shaded").axes[0]
+    )[:2]
+    assert all(raster.get_extent() == flat.get_extent() for raster in shaded)
+    assert (
+        painted(shaded)
+        == painted([flat])
+        == len(SolutionValidator(instance).swept_cells(solution))
+    )
+
+
+@pytest.mark.parametrize("create", [create_solution_plot, create_solution_animation])
+def test_an_unknown_coverage_style_is_refused(create):
+    with pytest.raises(ValueError, match="coverage"):
+        create(make_instance(), make_solution(), coverage="per-cutter")
 
 
 # --------------------------------------------------------------------------
@@ -524,7 +604,7 @@ def test_a_cutter_with_a_short_tour_waits_at_its_start():
 
 
 @pytest.mark.parametrize("max_frames", [300, 5, 2])
-def test_coverage_grows_monotonically_to_the_full_swept_area(max_frames: int):
+def test_coverage_grows_monotonically_to_the_full_swept_area(max_frames: int, coverage):
     """
     Striding must not lose the placements between two frames: whatever the
     frame budget, the animation has to end on exactly the area the verifier
@@ -532,7 +612,9 @@ def test_coverage_grows_monotonically_to_the_full_swept_area(max_frames: int):
     """
     instance, solution = make_instance(), make_solution()
     expected = len(SolutionValidator(instance).swept_cells(solution))
-    animation = create_solution_animation(instance, solution, max_frames=max_frames)
+    animation = create_solution_animation(
+        instance, solution, max_frames=max_frames, coverage=coverage
+    )
     covered = []
     for frame in frames_of(animation):
         artists = animation._func(frame)
@@ -543,7 +625,7 @@ def test_coverage_grows_monotonically_to_the_full_swept_area(max_frames: int):
 
 
 @pytest.mark.parametrize("center", L_CENTERS)
-def test_the_animated_cutter_and_its_trail_are_anchored_at_the_center(center):
+def test_the_animated_cutter_and_its_trail_are_anchored_at_the_center(center, coverage):
     """
     Both halves of a frame are placed by the center -- the moving outline and
     the coverage stamped behind it -- so both are checked against the verifier
@@ -551,7 +633,7 @@ def test_the_animated_cutter_and_its_trail_are_anchored_at_the_center(center):
     """
     instance = make_instance(size=4, cutter=L_CUTTER, center=center)
     solution = make_solution()
-    animation = create_solution_animation(instance, solution)
+    animation = create_solution_animation(instance, solution, coverage=coverage)
 
     (_, patch) = animation._func(0)
     assert misplaced(patch, instance, solution.tours[0].start) == pytest.approx(0.0)
@@ -563,10 +645,10 @@ def test_the_animated_cutter_and_its_trail_are_anchored_at_the_center(center):
     )
 
 
-def test_animation_restarts_cleanly_when_it_loops():
+def test_animation_restarts_cleanly_when_it_loops(coverage):
     """Replaying from the first frame must not keep the coverage of the last."""
     instance, solution = make_instance(), make_solution()
-    animation = create_solution_animation(instance, solution)
+    animation = create_solution_animation(instance, solution, coverage=coverage)
     frames = frames_of(animation)
     for frame in frames:
         animation._func(frame)
@@ -575,10 +657,10 @@ def test_animation_restarts_cleanly_when_it_loops():
     assert first_again == len(SolutionValidator(instance).cutter)
 
 
-def test_animation_saves_as_a_gif(tmp_path: Path):
+def test_animation_saves_as_a_gif(tmp_path: Path, coverage):
     path = tmp_path / "tour.gif"
     animation = create_solution_animation(
-        make_instance(), make_solution(), max_frames=4
+        make_instance(), make_solution(), max_frames=4, coverage=coverage
     )
     animation.save(path, writer="pillow", dpi=40)
     assert path.stat().st_size > 0
@@ -598,20 +680,22 @@ def undecorated(figure: Figure) -> bool:
     )
 
 
-def test_a_bare_solution_plot_drops_the_frame_around_the_drawing():
-    figure = create_solution_plot(make_instance(), make_solution(), bare=True)
+def test_a_bare_solution_plot_drops_the_frame_around_the_drawing(coverage):
+    figure = create_solution_plot(
+        make_instance(), make_solution(), coverage=coverage, bare=True
+    )
     assert undecorated(figure)
     assert renders(figure)
 
 
-def test_a_bare_solution_plot_keeps_everything_that_is_the_drawing():
+def test_a_bare_solution_plot_keeps_everything_that_is_the_drawing(coverage):
     """
     The point is to remove the frame, not the picture: the coverage rasters,
     the region, the tours and the cutter outlines all have to survive.
     """
     instance, solution = make_instance(), make_solution(boustrophedon(rows=2))
-    plain = create_solution_plot(instance, solution)
-    bare = create_solution_plot(instance, solution, bare=True)
+    plain = create_solution_plot(instance, solution, coverage=coverage)
+    bare = create_solution_plot(instance, solution, coverage=coverage, bare=True)
     for attribute in ("images", "lines", "patches"):
         assert len(getattr(bare.axes[0], attribute)) == len(
             getattr(plain.axes[0], attribute)
