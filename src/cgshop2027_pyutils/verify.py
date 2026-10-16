@@ -63,7 +63,7 @@ class SolutionValidator:
         """
         The cells the cutters sweep over, clipped to the region's surroundings.
         """
-        return dilate(self._anchors(solution), self.cutter)
+        return dilate(self.reachable_anchors(solution), self.cutter)
 
     def uncovered_cells(self, solution: CGSHOP2027Solution) -> CellSet:
         """
@@ -100,10 +100,14 @@ class SolutionValidator:
         none = np.empty((2, 0), dtype=np.int64)
         return np.hstack([none, *starts]), np.hstack([none, *ends])
 
-    def _anchors(self, solution: CGSHOP2027Solution) -> CellSet:
+    def reachable_anchors(self, solution: CGSHOP2027Solution) -> CellSet:
         """
         Every anchor position visited by any cutter, clipped to the positions
         from which the cutter can touch the region at all.
+
+        The clipped box is what bounds the swept area, so anything drawing
+        coverage has to agree with it cell for cell or the picture and the
+        verdict part ways.
 
         Each edge contributes a single slice write, so this costs one operation
         per edge rather than one per unit of travel.

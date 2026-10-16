@@ -138,10 +138,23 @@ animation = create_solution_animation(instance, solution)
 animation.save("solution.gif", writer="pillow")
 ```
 
-The solution plot shades the swept area, marks any cells left uncovered in red
-and draws one tour per cutter. The animation strides through the tours to fit
+The solution plot draws one tour per cutter, shades the swept area and marks any
+cells left uncovered in red. The animation strides through the tours to fit
 `max_frames` (300 by default), filling in coverage as the cutters move; pass
 `step` to control the stride yourself.
+
+Both draw the swept area in one flat colour by default. Pass `coverage="shaded"`
+to have each cutter shade the area it sweeps in its own colour instead, graded
+by how often it passed over each cell: washed out towards white where it went by
+once, deepened towards black over the cell it worked hardest. All cutters share
+one scale, so the same shade means the same number of passes whichever cutter
+drew it, and where two of them sweep the same cell their fills blend. This needs
+a count grid per cutter, so on large instances it is noticeably slower and uses
+more memory, increasingly so with more cutters.
+
+```python
+create_solution_plot(instance, solution, coverage="shaded").savefig("shaded.png")
+```
 
 All three take `bare=True`, which drops the axes, the grid and every title and
 trims the figure to the drawing, for a picture meant for a paper or a slide
@@ -194,6 +207,11 @@ Issues & PRs welcome. Please:
 
 ## Changelog
 
+- **Unreleased**: The solution plot and the animation take `coverage="shaded"`,
+  which draws coverage per cutter and shaded by how often each cell was passed
+  over; the default, `"flat"`, keeps the single flat area. Adds `CellCounts` and
+  `dilate_counts` to `grid.py` and makes `SolutionValidator.reachable_anchors`
+  public.
 - **0.1.0** (2026-08-25): First release. Instance and solution schemas, the
   solution verifier, archive reading and writing, the instance database, and
   plotting and animation.
