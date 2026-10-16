@@ -182,19 +182,19 @@ def _rasterize(rings: Sequence[PointSequence]) -> CellSet:
     y_max = max(max(ring.y) for ring in rings)
     width, height = x_max - x_min, y_max - y_min
 
-    # One column per vertical grid line, so that a prefix sum over the columns
-    # counts the crossings west of each cell.
-    crossings = np.zeros((height, width + 1), dtype=np.int32)
+    # One column per vertical grid line, so that a prefix XOR over the columns
+    # gives the parity of the crossings west of each cell.
+    crossings = np.zeros((height, width + 1), dtype=np.uint8)
     for ring in rings:
         points = list(zip(ring.x, ring.y, strict=True))
         for (x1, y1), (_, y2) in zip(points, [*points[1:], points[0]], strict=True):
             if y1 == y2:
                 continue  # horizontal edges are never crossed by a westward ray
             low, high = min(y1, y2), max(y1, y2)
-            crossings[low - y_min : high - y_min, x1 - x_min] += 1
+            crossings[low - y_min : high - y_min, x1 - x_min] ^= 1
 
-    inside = np.cumsum(crossings, axis=1)[:, :width] % 2 == 1
-    return CellSet(inside, (x_min, y_min))
+    np.bitwise_xor.accumulate(crossings, axis=1, out=crossings)
+    return CellSet(crossings[:, :width].view(bool), (x_min, y_min))
 
 
 def _horizontal_runs(cells: CellSet) -> Iterator[tuple[int, int, int]]:
