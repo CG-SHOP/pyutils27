@@ -207,15 +207,15 @@ Issues & PRs welcome. Please:
 
 ## Changelog
 
-- **0.2.0**: Incorporated a faster and more memory-efficient verification
-  routine, with a fallback to the old routine in case of unusually large
-  coordinates, in addition to stricter enforced limits on the coordinate sizes
-  in tours. The solution plot and the animation now take `coverage="shaded"` as
-  optional argument, which draws coverage per cutter and shaded by how often
-  each cell was passed over; the default, `"flat"`, keeps the single flat area
-  (it's a bit faster and uses less memory, looking less nice as a trade-off).
-  Adds `CellCounts` and `dilate_counts` to `grid.py` and makes
-  `SolutionValidator.reachable_anchors` public.
+- **0.2.0** (2026-10-16): Incorporated a faster and more memory-efficient
+  verification routine, with a fallback to the old routine in case of unusually
+  large coordinates, in addition to stricter enforced limits on the coordinate
+  sizes in tours. The solution plot and the animation now take
+  `coverage="shaded"` as optional argument, which draws coverage per cutter and
+  shaded by how often each cell was passed over; the default, `"flat"`, keeps
+  the single flat area (it's a bit faster and uses less memory, looking less
+  nice as a trade-off). Adds `CellCounts` and `dilate_counts` to `grid.py` and
+  makes `SolutionValidator.reachable_anchors` public.
 - **0.1.0** (2026-08-25): First release. Instance and solution schemas, the
   solution verifier, archive reading and writing, the instance database, and
   plotting and animation.
