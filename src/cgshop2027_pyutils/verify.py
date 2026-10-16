@@ -15,7 +15,7 @@ unit cells `C` and a unit vector `e` we have `C (+) [p, p+e] = (C+p) | (C+p+e)`.
 
 import numpy as np
 
-from .grid import CellSet, _horizontal_runs, dilate, rasterize, rasterize_ring
+from .grid import CellSet, dilate, dilate_segments, rasterize, rasterize_ring
 from .schemas import CGSHOP2027Instance, CGSHOP2027Solution
 
 __all__ = ["SolutionValidator", "check_for_errors"]
@@ -69,35 +69,16 @@ class SolutionValidator:
         """
         The cells of the region that no cutter ever sweeps over.
 
-        The anchors along an edge form a segment, and a segment summed with one
-        horizontal run of the cutter is a rectangle of cells. Each rectangle
-        goes into a difference array over the region's box as four corners;
-        two prefix sums then count the rectangles covering each cell. Clipping
-        a rectangle that misses the box makes it empty, and an empty
-        rectangle's corners cancel out.
+        Each edge moves its cutter's anchor along a segment, so the swept cells
+        are the cutter dilated by those segments; `dilate_segments` computes
+        that over the region's box without listing the anchors one by one.
         """
-        x0, y0 = self.region.origin
-        height, width = self.region.mask.shape
-        points = [np.array([tour.x, tour.y], dtype=np.int64) for tour in solution.tours]
-        successors = [np.roll(p, -1, axis=1) for p in points]
-        low = np.minimum(np.hstack(points), np.hstack(successors))
-        high = np.maximum(np.hstack(points), np.hstack(successors))
-        counts = np.zeros((height + 1) * (width + 1), dtype=np.int32)
-        for dx, dy, length in _horizontal_runs(self.cutter):
-            left = np.clip(low[0] + dx - x0, 0, width)
-            right = np.clip(high[0] + dx + length - x0, 0, width)
-            bottom = np.clip(low[1] + dy - y0, 0, height) * (width + 1)
-            top = np.clip(high[1] + dy + 1 - y0, 0, height) * (width + 1)
-            np.add.at(counts, bottom + left, 1)
-            np.add.at(counts, bottom + right, -1)
-            np.add.at(counts, top + left, -1)
-            np.add.at(counts, top + right, 1)
-        counts = counts.reshape(height + 1, width + 1)
-        np.cumsum(counts, axis=0, out=counts)
-        np.cumsum(counts, axis=1, out=counts)
-        uncovered = counts[:height, :width] == 0
-        uncovered &= self.region.mask
-        return CellSet(uncovered, self.region.origin)
+        starts = [np.array([tour.x, tour.y], dtype=np.int64) for tour in solution.tours]
+        ends = [np.roll(points, -1, axis=1) for points in starts]
+        swept = dilate_segments(
+            np.hstack(starts), np.hstack(ends), self.cutter, self.region.bounds
+        )
+        return self.region.difference(swept)
 
     def _anchors(self, solution: CGSHOP2027Solution) -> CellSet:
         """

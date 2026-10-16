@@ -18,7 +18,7 @@ from shapely.ops import unary_union
 
 from .schemas.instance import PointSequence, PolyominoWithHoles
 
-__all__ = ["CellSet", "dilate", "rasterize", "rasterize_ring"]
+__all__ = ["CellSet", "dilate", "dilate_segments", "rasterize", "rasterize_ring"]
 
 
 @dataclass(frozen=True)
@@ -250,3 +250,40 @@ def dilate(cells: CellSet, structuring: CellSet) -> CellSet:
         col = x - structuring.origin[0]
         result[row : row + cells.height, col : col + swept.shape[1]] |= swept
     return CellSet(result, (x_min, y_min))
+
+
+def dilate_segments(
+    starts: np.ndarray,
+    ends: np.ndarray,
+    structuring: CellSet,
+    bounds: tuple[int, int, int, int],
+) -> CellSet:
+    """
+    The Minkowski sum of `structuring` with the lattice points of a union of
+    axis-parallel segments, clipped to the box `bounds` (given as in
+    `CellSet.bounds`).
+
+    The segments run from `starts[:, i]` to `ends[:, i]`, both integer arrays of
+    shape `(2, n)`. A segment summed with one horizontal run of `structuring`
+    is a rectangle of cells. Each rectangle goes into a difference array over
+    the box as four corners; two prefix sums then count the rectangles
+    covering each cell. Clipping a rectangle that misses the box makes it
+    empty, and an empty rectangle's corners cancel out.
+    """
+    x_min, y_min, x_max, y_max = bounds
+    width, height = x_max - x_min + 1, y_max - y_min + 1
+    low, high = np.minimum(starts, ends), np.maximum(starts, ends)
+    counts = np.zeros((height + 1) * (width + 1), dtype=np.int32)
+    for dx, dy, length in _horizontal_runs(structuring):
+        left = np.clip(low[0] + dx - x_min, 0, width)
+        right = np.clip(high[0] + dx + length - x_min, 0, width)
+        bottom = np.clip(low[1] + dy - y_min, 0, height) * (width + 1)
+        top = np.clip(high[1] + dy + 1 - y_min, 0, height) * (width + 1)
+        np.add.at(counts, bottom + left, 1)
+        np.add.at(counts, bottom + right, -1)
+        np.add.at(counts, top + left, -1)
+        np.add.at(counts, top + right, 1)
+    counts = counts.reshape(height + 1, width + 1)
+    np.cumsum(counts, axis=0, out=counts)
+    np.cumsum(counts, axis=1, out=counts)
+    return CellSet(counts[:height, :width] != 0, (x_min, y_min))
