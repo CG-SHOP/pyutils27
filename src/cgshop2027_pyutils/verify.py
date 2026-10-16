@@ -72,13 +72,33 @@ class SolutionValidator:
         Each edge moves its cutter's anchor along a segment, so the swept cells
         are the cutter dilated by those segments; `dilate_segments` computes
         that over the region's box without listing the anchors one by one.
+
+        Neither the schema nor JSON limits the size of an integer, so a
+        coordinate may be too large for that 64-bit computation. Such inputs
+        take the slower route through `swept_cells` instead, which works with
+        Python integers throughout.
+        """
+        try:
+            swept = dilate_segments(
+                *self._edge_segments(solution), self.cutter, self.region.bounds
+            )
+        except OverflowError:
+            swept = self.swept_cells(solution)
+        return self.region.difference(swept)
+
+    def _edge_segments(
+        self, solution: CGSHOP2027Solution
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        The segments the anchors move along, as `(starts, ends)` arrays of shape
+        `(2, n)`: one per edge, the closing edge included, and one of length zero
+        for a tour of a single point. Raises `OverflowError` for a coordinate
+        that does not fit into 64 bits.
         """
         starts = [np.array([tour.x, tour.y], dtype=np.int64) for tour in solution.tours]
         ends = [np.roll(points, -1, axis=1) for points in starts]
-        swept = dilate_segments(
-            np.hstack(starts), np.hstack(ends), self.cutter, self.region.bounds
-        )
-        return self.region.difference(swept)
+        none = np.empty((2, 0), dtype=np.int64)
+        return np.hstack([none, *starts]), np.hstack([none, *ends])
 
     def _anchors(self, solution: CGSHOP2027Solution) -> CellSet:
         """

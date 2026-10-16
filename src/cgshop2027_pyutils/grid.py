@@ -20,6 +20,9 @@ from .schemas.instance import PointSequence, PolyominoWithHoles
 
 __all__ = ["CellSet", "dilate", "dilate_segments", "rasterize", "rasterize_ring"]
 
+# The largest coordinate magnitude `dilate_segments` computes with in 64 bits.
+_SAFE_COORDINATE = 2**60
+
 
 @dataclass(frozen=True)
 class CellSet:
@@ -269,12 +272,35 @@ def dilate_segments(
     the box as four corners; two prefix sums then count the rectangles
     covering each cell. Clipping a rectangle that misses the box makes it
     empty, and an empty rectangle's corners cancel out.
+
+    The segments may lie anywhere in the 64-bit range: they are first clamped
+    to one step beyond the positions from which `structuring` reaches the box,
+    which changes nothing about what they cover inside it, and keeps every sum
+    below far from overflowing -- an overflow would not raise, but silently
+    turn a rectangle inside out. That argument needs the box and `structuring`
+    themselves to stay within `+-2**60`; beyond that, this raises
+    `OverflowError` rather than compute in a range it cannot vouch for.
     """
     x_min, y_min, x_max, y_max = bounds
+    s_x_min, s_y_min, s_x_max, s_y_max = structuring.bounds
+    if max(map(abs, (*bounds, *structuring.bounds))) > _SAFE_COORDINATE:
+        msg = "The box or the structuring element is too far out for 64 bits."
+        raise OverflowError(msg)
+    reach_min = [[x_min - s_x_max - 1], [y_min - s_y_max - 1]]
+    reach_max = [[x_max - s_x_min + 1], [y_max - s_y_min + 1]]
+    starts = np.clip(starts, reach_min, reach_max)
+    ends = np.clip(ends, reach_min, reach_max)
+
     width, height = x_max - x_min + 1, y_max - y_min + 1
     low, high = np.minimum(starts, ends), np.maximum(starts, ends)
-    counts = np.zeros((height + 1) * (width + 1), dtype=np.int32)
-    for dx, dy, length in _horizontal_runs(structuring):
+    runs = list(_horizontal_runs(structuring))
+    # A cell's count, and every partial sum on the way to it, is bounded by the
+    # number of rectangles, so 32 bits only run out for billions of them; past
+    # that point, the counts cost four more bytes per cell instead of wrapping.
+    rectangles = low.shape[1] * len(runs)
+    dtype = np.int32 if rectangles <= np.iinfo(np.int32).max else np.int64
+    counts = np.zeros((height + 1) * (width + 1), dtype=dtype)
+    for dx, dy, length in runs:
         left = np.clip(low[0] + dx - x_min, 0, width)
         right = np.clip(high[0] + dx + length - x_min, 0, width)
         bottom = np.clip(low[1] + dy - y_min, 0, height) * (width + 1)
@@ -286,4 +312,4 @@ def dilate_segments(
     counts = counts.reshape(height + 1, width + 1)
     np.cumsum(counts, axis=0, out=counts)
     np.cumsum(counts, axis=1, out=counts)
-    return CellSet(counts[:height, :width] != 0, (x_min, y_min))
+    return CellSet(counts[:height, :width] > 0, (x_min, y_min))

@@ -264,7 +264,9 @@ def test_matches_a_naive_reference_implementation(seed: int):
     """
     The verifier sweeps a whole edge at a time and dilates once, so it is
     compared against an implementation that does neither: one that stamps the
-    cutter at every single unit of travel.
+    cutter at every single unit of travel. Both of its routes are: the one
+    through `swept_cells` is only taken for coordinates beyond 64 bits, which
+    would otherwise leave it untested on anything but those.
     """
     rng = np.random.default_rng(seed)
     span = int(rng.integers(2, 5))
@@ -274,9 +276,10 @@ def test_matches_a_naive_reference_implementation(seed: int):
         *(random_tour(rng, span) for _ in range(int(rng.integers(1, 4))))
     )
     validator = SolutionValidator(instance)
-    assert set(validator.uncovered_cells(solution).cells()) == naive_uncovered(
-        validator, solution
-    )
+    expected = naive_uncovered(validator, solution)
+    assert set(validator.uncovered_cells(solution).cells()) == expected
+    fallback = validator.region.difference(validator.swept_cells(solution))
+    assert set(fallback.cells()) == expected
 
 
 def test_larger_simple_instance_with_hole():
@@ -312,6 +315,53 @@ def test_larger_simple_instance_with_hole():
         ],
     )
     assert validator.check_for_errors(solution2) == []
+
+
+# --------------------------------------------------------------------------
+# hostile and degenerate input
+# --------------------------------------------------------------------------
+
+
+INT64_MAX = 2**63 - 1
+THREE_BY_THREE = {"x": [0, 3, 3, 0], "y": [0, 0, 3, 3]}
+
+
+@pytest.mark.parametrize("x", [INT64_MAX - 1, INT64_MAX, -INT64_MAX - 1])
+def test_a_cutter_out_at_the_64_bit_limits_covers_nothing(x):
+    """
+    A regression test: integer overflow once let this short tour, far away
+    from the region, pass as covering all of it.
+    """
+    instance = make_instance(size=10, cutter=THREE_BY_THREE, center=(1, 1))
+    errors = check_for_errors(instance, make_solution(tour((x, -2), (x, 12))))
+    assert len(errors) == 1
+    assert "100 cells" in errors[0]
+
+
+def test_json_does_not_bound_the_size_of_a_coordinate():
+    """Why the verifier has to cope with coordinates beyond 64 bits at all."""
+    far = 10**400
+    solution = CGSHOP2027Solution.model_validate_json(
+        f'{{"instance_uid": "demo", "tours": [{{"x": [{far}], "y": [0]}}]}}'
+    )
+    assert solution.tours[0].x == [far]
+
+
+@pytest.mark.parametrize("far", [2**63, -(2**63) - 1, 10**400])
+def test_coordinates_beyond_64_bits_are_verified_rather_than_raised(far):
+    instance = make_instance(cutters=2)
+    assert check_for_errors(instance, make_solution(FULL_SWEEP, tour((far, far)))) == []
+    errors = check_for_errors(instance, make_solution(PARKED, tour((far, 0))))
+    assert len(errors) == 1
+    assert "9 cells" in errors[0]
+
+
+def test_no_tours_at_all_are_reported_rather_than_raised():
+    assert check_for_errors(make_instance(), make_solution()) == [
+        "The solution has 0 tours, but the instance calls for exactly 1.",
+        "The region is not covered: 9 cells are never swept, "
+        "for example the cell at (0, 0).",
+    ]
 
 
 # --------------------------------------------------------------------------
