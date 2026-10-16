@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cgshop2027-pyutils"
-version = "0.1.0"
+version = "0.2.0"
 description = "Utilities for verifying solutions of the CG:SHOP 2027 Competition."
 readme = "README.md"
 requires-python = ">=3.10"
