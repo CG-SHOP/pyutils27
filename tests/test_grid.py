@@ -7,6 +7,7 @@ from cgshop2027_pyutils.grid import (
     CellSet,
     dilate,
     dilate_counts,
+    dilate_segments,
     rasterize,
     rasterize_ring,
 )
@@ -233,3 +234,76 @@ def test_dilate_counts_by_a_single_cell_is_a_translation():
     shifted = dilate_counts(counted(cells), CellSet(np.array([[True]]), (2, -3)))
     assert set(shifted.nonzero().cells()) == set(cells.translated(2, -3).cells())
     assert shifted.maximum == 1
+
+
+def lattice_points(start, end) -> set[tuple[int, int]]:
+    (x0, y0), (x1, y1) = start, end
+    return {
+        (x, y)
+        for x in range(min(x0, x1), max(x0, x1) + 1)
+        for y in range(min(y0, y1), max(y0, y1) + 1)
+    }
+
+
+def sweep(segments, structuring: CellSet, bounds) -> CellSet:
+    """`dilate_segments` on a list of `(start, end)` pairs."""
+    starts = np.array([start for start, _ in segments], dtype=np.int64).reshape(-1, 2)
+    ends = np.array([end for _, end in segments], dtype=np.int64).reshape(-1, 2)
+    return dilate_segments(starts.T, ends.T, structuring, bounds)
+
+
+THREE_BY_THREE = CellSet(np.ones((3, 3), dtype=bool), (-1, -1))
+BOX = (0, 0, 9, 9)
+INT64_MIN, INT64_MAX = -(2**63), 2**63 - 1
+
+
+def test_dilate_segments_matches_the_naive_sum():
+    """
+    Checked against the naive sum over every lattice point of every segment,
+    clipped to the box, with segments that start, end or lie outside it.
+    """
+    rng = np.random.default_rng(1)
+    bounds = (-2, -1, 4, 5)
+    for _ in range(100):
+        structuring = random_cell_set(rng, (3, 4))
+        segments = []
+        for _ in range(int(rng.integers(0, 4))):
+            start = (int(rng.integers(-8, 9)), int(rng.integers(-8, 9)))
+            step = int(rng.integers(-6, 7))
+            horizontal = rng.random() < 0.5
+            end = (
+                (start[0] + step, start[1])
+                if horizontal
+                else (start[0], start[1] + step)
+            )
+            segments.append((start, end))
+        anchors = set().union(*(lattice_points(*segment) for segment in segments))
+        expected = {
+            (ax + bx, ay + by)
+            for ax, ay in anchors
+            for bx, by in structuring.cells()
+            if bounds[0] <= ax + bx <= bounds[2] and bounds[1] <= ay + by <= bounds[3]
+        }
+        assert set(sweep(segments, structuring, bounds).cells()) == expected
+
+
+@pytest.mark.parametrize("x", [INT64_MIN, INT64_MIN + 1, INT64_MAX - 1, INT64_MAX])
+def test_dilate_segments_far_out_covers_nothing(x):
+    """
+    A regression test: before the segments were clamped, adding the extent of
+    the structuring element overflowed for `x` near the upper limit, which
+    turned the rectangle inside out into one that read as covering every cell
+    of the rows it spans.
+    """
+    assert not len(sweep([((x, -10), (x, 20))], THREE_BY_THREE, BOX))
+
+
+def test_dilate_segments_clamping_keeps_what_a_long_segment_covers():
+    swept = sweep([((INT64_MIN, 4), (INT64_MAX, 4))], THREE_BY_THREE, BOX)
+    assert set(swept.cells()) == {(x, y) for x in range(10) for y in (3, 4, 5)}
+
+
+def test_dilate_segments_refuses_a_box_too_far_out_for_64_bits():
+    far = 2**61
+    with pytest.raises(OverflowError):
+        sweep([((far, 0), (far, 0))], THREE_BY_THREE, (far, 0, far + 9, 9))

@@ -8,15 +8,14 @@ whole region.
 
 The coverage check avoids walking the tours cell by cell: the swept area is
 `cutter (+) anchors`, the Minkowski sum of the cutter with the set of all
-anchor positions any cutter ever visits. Unioning the anchors first makes
-revisits free, and one dilation replaces one placement per cutter per unit of
-travel. Continuous motion adds nothing to sweep, because for a union of unit
-cells `C` and a unit vector `e` we have `C (+) [p, p+e] = (C+p) | (C+p+e)`.
+anchor positions any cutter ever visits; `uncovered_cells` explains how it is
+evaluated. Continuous motion adds nothing to sweep, because for a union of
+unit cells `C` and a unit vector `e` we have `C (+) [p, p+e] = (C+p) | (C+p+e)`.
 """
 
 import numpy as np
 
-from .grid import CellSet, dilate, rasterize, rasterize_ring
+from .grid import CellSet, dilate, dilate_segments, rasterize, rasterize_ring
 from .schemas import CGSHOP2027Instance, CGSHOP2027Solution
 
 __all__ = ["SolutionValidator", "check_for_errors"]
@@ -69,8 +68,37 @@ class SolutionValidator:
     def uncovered_cells(self, solution: CGSHOP2027Solution) -> CellSet:
         """
         The cells of the region that no cutter ever sweeps over.
+
+        Each edge moves its cutter's anchor along a segment, so the swept cells
+        are the cutter dilated by those segments; `dilate_segments` computes
+        that over the region's box without listing the anchors one by one.
+
+        Neither the schema nor JSON limits the size of an integer, so a
+        coordinate may be too large for that 64-bit computation. Such inputs
+        take the slower route through `swept_cells` instead, which works with
+        Python integers throughout.
         """
-        return self.region.difference(self.swept_cells(solution))
+        try:
+            swept = dilate_segments(
+                *self._edge_segments(solution), self.cutter, self.region.bounds
+            )
+        except OverflowError:
+            swept = self.swept_cells(solution)
+        return self.region.difference(swept)
+
+    def _edge_segments(
+        self, solution: CGSHOP2027Solution
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        The segments the anchors move along, as `(starts, ends)` arrays of shape
+        `(2, n)`: one per edge, the closing edge included, and one of length zero
+        for a tour of a single point. Raises `OverflowError` for a coordinate
+        that does not fit into 64 bits.
+        """
+        starts = [np.array([tour.x, tour.y], dtype=np.int64) for tour in solution.tours]
+        ends = [np.roll(points, -1, axis=1) for points in starts]
+        none = np.empty((2, 0), dtype=np.int64)
+        return np.hstack([none, *starts]), np.hstack([none, *ends])
 
     def reachable_anchors(self, solution: CGSHOP2027Solution) -> CellSet:
         """
@@ -107,7 +135,8 @@ class SolutionValidator:
         missing = len(uncovered)
         if not missing:
             return []
-        witness = next(uncovered.cells())
+        row, col = divmod(int(np.argmax(uncovered.mask)), uncovered.width)
+        witness = (uncovered.origin[0] + col, uncovered.origin[1] + row)
         return [
             f"The region is not covered: {missing} cells are never swept, "
             f"for example the cell at {witness}."
